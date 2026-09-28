@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>まちの店手帖</title>
+<meta name="theme-color" content="#23466E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="店手帖">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+
+<!-- 初回設定：APIキー入力 -->
+<section id="setup" class="setup" hidden>
+  <div class="setup-card">
+    <h1>まちの店手帖</h1>
+    <p>地図を表示するには、Google Maps Platform の APIキーが必要です。取得方法は同梱の README.md を見てください。</p>
+    <form id="setupForm" class="stack">
+      <label for="keyInput" class="lbl">APIキー</label>
+      <input id="keyInput" type="text" autocomplete="off" spellcheck="false" placeholder="AIza...">
+      <p id="setupErr" class="err" hidden></p>
+      <button class="primary" type="submit">はじめる</button>
+    </form>
+  </div>
+</section>
+
+<div id="app" class="app">
+  <div id="map" class="map" aria-label="地図"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-name">まちの店手帖</span>
+      <button type="button" class="icon-btn" id="menuBtn" aria-haspopup="true" aria-expanded="false" aria-label="メニュー">⋯</button>
+    </div>
+    <div class="menu" id="menu" hidden>
+      <button type="button" id="exportBtn">バックアップを保存</button>
+      <label class="menu-file">バックアップを読み込む<input type="file" id="importInput" accept="application/json,.json"></label>
+      <button type="button" id="keyBtn">APIキーを変更</button>
+    </div>
+  </header>
+
+  <div class="jump">
+    <button type="button" data-jump="tenjin">天神</button>
+    <button type="button" data-jump="hakata">博多</button>
+    <button type="button" data-jump="nakasu">中洲</button>
+    <button type="button" id="locateBtn" class="locate">現在地</button>
+  </div>
+
+  <button type="button" class="fab" id="addBtn">＋ 記録する</button>
+
+  <section class="sheet" id="sheet" data-size="peek" aria-label="お店の一覧">
+    <button type="button" class="handle" id="handle" aria-label="一覧を広げる・たたむ"><span></span></button>
+    <div class="sheet-body" id="sheetBody"></div>
+  </section>
+</div>
+
+<!-- 記録・編集フォーム -->
+<dialog id="formDlg" class="dlg">
+  <form id="shopForm" method="dialog" class="dlg-inner" autocomplete="off">
+    <div class="dlg-head">
+      <h2 id="formTitle">お店を記録</h2>
+      <button type="button" class="ghost" id="formClose">閉じる</button>
+    </div>
+
+    <div class="field">
+      <label for="placeQ" class="lbl">お店を探す</label>
+      <div class="search-row">
+        <input type="search" id="placeQ" placeholder="店名を入力（例：天神 うどん 〇〇）" enterkeyhint="search">
+        <button type="button" id="placeSearch">検索</button>
+      </div>
+      <button type="button" class="ghost small" id="useHere">今いる場所で登録する</button>
+      <ul class="cands" id="cands"></ul>
+      <div class="picked" id="picked" hidden></div>
+    </div>
+
+    <div class="field">
+      <label for="f-name" class="lbl">店名 <span class="req">*</span></label>
+      <input type="text" id="f-name" required maxlength="60">
+    </div>
+    <div class="field">
+      <label for="f-area" class="lbl">エリア</label>
+      <input type="text" id="f-area" maxlength="30" placeholder="例：天神、博多駅前、大名">
+      <div class="chips" id="areaChips"></div>
+    </div>
+    <div class="field">
+      <span class="lbl">写真（入口・外観・料理など）</span>
+      <div class="photo-grid" id="photoGrid"></div>
+    </div>
+    <div class="field">
+      <span class="lbl">ジャンル</span>
+      <div class="chips" id="genreChips"></div>
+    </div>
+    <div class="field">
+      <span class="lbl">おすすめ度</span>
+      <div class="stars" id="stars"></div>
+    </div>
+    <div class="field">
+      <label for="f-memo" class="lbl">ひとことメモ</label>
+      <textarea id="f-memo" maxlength="300" placeholder="頼んだもの、雰囲気、値段など"></textarea>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="ghost" id="formCancel">キャンセル</button>
+      <button type="submit" class="primary" id="saveBtn">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="viewer"></div>
+<div id="toast" class="toast" hidden></div>
+</body>
+</html>

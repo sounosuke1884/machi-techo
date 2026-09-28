@@ -1,0 +1,12 @@
+{
+  "name": "まちの店手帖",
+  "short_name": "店手帖",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#F4F6F8",
+  "theme_color": "#23466E",
+  "lang": "ja",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
