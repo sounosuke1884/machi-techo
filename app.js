@@ -553,7 +553,12 @@ async function startRoute(s, mode){
   }
   const [w, t] = await Promise.allSettled([computeRoutes(origin, s, "WALK"), computeRoutes(origin, s, "TRANSIT")]);
   if(!isCurrentRoute(s)) return;   // user moved on
-  const all = t.status === "fulfilled" ? t.value : [];
+  let all = t.status === "fulfilled" ? t.value : [];
+  if(t.status === "fulfilled" && !all.some(usesTransit)){
+    // Google suggested walking only; ask again preferring less walking to get an actual train/bus route.
+    try{ all = [...all, ...await computeRoutes(origin, s, "TRANSIT", { lessWalking: true })]; }catch{}
+    if(!isCurrentRoute(s)) return;
+  }
   routeOrigin = origin;
   routeState = {
     shop: s, mode: panel.routeMode, sel: 0,
@@ -584,13 +589,14 @@ function setRouteMode(mode){
 }
 function setRouteSel(i){ routeState.sel = i; showSelectedRoute(); renderPanel(); }
 
-async function computeRoutes(origin, s, mode){
+async function computeRoutes(origin, s, mode, opts = {}){
   const body = {
     origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lng } } },
     destination: s.placeId ? { placeId: s.placeId } : { location: { latLng: { latitude: s.lat, longitude: s.lng } } },
     travelMode: mode, languageCode: "ja", units: "METRIC",
   };
   if(mode === "TRANSIT") body.computeAlternativeRoutes = true;
+  if(opts.lessWalking) body.transitPreferences = { routingPreference: "LESS_WALKING", allowedTravelModes: ["BUS", "SUBWAY", "TRAIN", "LIGHT_RAIL", "RAIL"] };
   const fields = [
     "routes.duration", "routes.distanceMeters", "routes.polyline.encodedPolyline", "routes.localizedValues",
     "routes.travelAdvisory.transitFare",
@@ -687,7 +693,7 @@ function routeView(){
       !st.loading && walkSec != null && bestTransit != null && walkSec <= bestTransit ? el("span", { class: "cmp-badge" }, "早い") : null),
     el("button", { type: "button", "aria-pressed": String(st.mode === "TRANSIT"), onclick: () => setRouteMode("TRANSIT") },
       el("span", { class: "cmp-label" }, "電車・バス"),
-      el("strong", {}, cmpVal(st.loading, bestTransit, st.walkFaster ? "歩きが早い" : "—")),
+      el("strong", {}, cmpVal(st.loading, bestTransit, st.walkFaster ? "ルートなし" : "—")),
       !st.loading && bestTransit != null && (walkSec == null || bestTransit < walkSec) ? el("span", { class: "cmp-badge" }, "早い") : null)));
 
   const nav = el("a", { class: "navlink", href: dirUrl(s, st.mode), target: "_blank", rel: "noopener" }, "Googleマップアプリでナビを開始");
@@ -724,7 +730,7 @@ function transitDetail(st, walkSec){
   const box = el("div", { class: "stack" });
   if(!st.transit.length){
     if(st.walkFaster){
-      box.append(el("p", { class: "notice" }, "この距離は、電車やバスに乗るより歩いたほうが早いため、電車・バスのルートはありません。"),
+      box.append(el("p", { class: "notice" }, "近すぎて、電車・バスを使うルートが見つかりませんでした。この距離は歩いたほうが早いです。"),
         el("button", { type: "button", onclick: () => setRouteMode("WALK") }, `徒歩ルートを見る（${walkSec != null ? fmtMin(walkSec) : ""}）`));
     }else box.append(el("p", { class: "err" }, st.transitErr || "電車・バスのルートが見つかりませんでした。"));
     return box;
