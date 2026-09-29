@@ -256,43 +256,59 @@ function filtered(){
 
 // ================= automatic readings (kuromoji dictionary) =================
 // Shop names in kanji get a hiragana reading so they can be found by typing hiragana.
-const KUROMOJI = "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/";
-let tokenizerP = null;
-function getTokenizer(){
-  if(tokenizerP) return tokenizerP;
-  tokenizerP = new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = KUROMOJI + "build/kuromoji.js";
-    s.onload = () => window.kuromoji.builder({ dicPath: KUROMOJI + "dict/" }).build((err, t) => err ? rej(err) : res(t));
-    s.onerror = rej;
-    document.head.append(s);
-  }).catch(e => { tokenizerP = null; throw e; });
-  return tokenizerP;
-}
+// The dictionary is heavy, so it runs in a Web Worker (kana-worker.js) and the worker is
+// closed as soon as the readings are made, to free the phone's memory.
 const hasKanji = s => /[㐀-鿿豈-﫿々〆ヶ]/.test(s || "");
-async function readingOf(name){
-  if(!hasKanji(name)) return toHiragana(name);
-  const t = await getTokenizer();
-  return toHiragana(t.tokenize(name).map(x => x.reading && x.reading !== "*" ? x.reading : x.surface_form).join(""));
+const KANA_GUARD = "machi-techo:kana-guard";   // counts runs that never finished (page crashed)
+function readGuard(){ try{ return JSON.parse(localStorage.getItem(KANA_GUARD)) || { running: false, fails: 0 }; }catch{ return { running: false, fails: 0 }; } }
+function writeGuard(g){ try{ localStorage.setItem(KANA_GUARD, JSON.stringify(g)); }catch{} }
+
+function readingsInWorker(names){
+  return new Promise((res, rej) => {
+    let w;
+    try{ w = new Worker("kana-worker.js?v=8"); }catch(e){ rej(e); return; }
+    const done = fn => arg => { clearTimeout(timer); w.terminate(); fn(arg); };
+    const timer = setTimeout(done(rej), 120000, new Error("timeout"));
+    w.onmessage = done(e => e.data.error ? rej(new Error(e.data.error)) : res(e.data.readings));
+    w.onerror = done(e => rej(e));
+    w.postMessage({ id: 1, names });
+  });
 }
+
 // Give readings to shops that don't have one yet, quietly in the background.
 let kanaRunning = false;
 async function fillReadings(){
   if(kanaRunning) return;
+  const todo = shops.filter(x => !x.kana && x.name);
+  if(!todo.length) return;
+  const guard = readGuard();
+  if(guard.fails >= 2) return;   // the dictionary crashed this phone twice: stop trying automatically
   kanaRunning = true;
+  writeGuard({ running: true, fails: guard.fails });
   try{
-    for(const s of shops.filter(x => !x.kana && x.name)){
-      let kana;
-      try{ kana = await readingOf(s.name); }catch{ break; }   // dictionary unavailable (offline): try next time
+    const kanjiNames = todo.filter(s => hasKanji(s.name)).map(s => s.name);
+    const readings = kanjiNames.length ? await readingsInWorker(kanjiNames) : [];
+    const byName = new Map(kanjiNames.map((n, i) => [n, toHiragana(readings[i] || "")]));
+    for(const s of todo){
       const cur = shops.find(x => x.id === s.id);
       if(!cur || cur.name !== s.name) continue;               // edited meanwhile
-      const next = { ...cur, kana };
+      const next = { ...cur, kana: hasKanji(s.name) ? byName.get(s.name) || "" : toHiragana(s.name) };
+      if(!next.kana) continue;
       try{ await store.put(next); }catch{}
       shops = shops.map(x => x.id === s.id ? next : x);
     }
+    writeGuard({ running: false, fails: 0 });
     if(view.q) renderResults();
+  }catch(e){
+    console.error(e);                                         // offline etc.: try again next time
+    writeGuard({ running: false, fails: guard.fails });
   }finally{ kanaRunning = false; }
 }
+// If the last run never finished, the page most likely ran out of memory: count it.
+(function checkGuard(){
+  const g = readGuard();
+  if(g.running) writeGuard({ running: false, fails: g.fails + 1 });
+})();
 function renderMarkers(){
   if(!map) return;
   for(const m of markers.values()) m.map = null;
