@@ -157,6 +157,47 @@ async function initMap(){
     clickableIcons: false,
   });
   renderMarkers();
+  autoLocateMissing();
+}
+
+// ================= automatic placement =================
+// Find a shop on Google Maps from its name (and area), biased to central Fukuoka.
+async function lookupPlace(name, area){
+  if(!G) return null;
+  const fields = ["id", "displayName", "formattedAddress", "location", "googleMapsURI", "addressComponents"];
+  for(const textQuery of [[name, area].filter(Boolean).join(" "), name]){
+    try{
+      const { places } = await G.places.Place.searchByText({
+        textQuery, fields, language: "ja", region: "jp", maxResultCount: 1,
+        locationBias: { center: { lat: HOME.lat, lng: HOME.lng }, radius: 30000 },
+      });
+      const p = places?.[0];
+      if(p?.location) return {
+        placeId: p.id, lat: p.location.lat(), lng: p.location.lng(),
+        address: (p.formattedAddress || "").replace(/^日本、?\s*(〒\d{3}-\d{4}\s*)?/, ""),
+        mapsUrl: p.googleMapsURI || "", area: areaFromComponents(p.addressComponents),
+      };
+    }catch{ /* try the next query */ }
+    if(!area) break;
+  }
+  return null;
+}
+// Place shops that were saved without a location (e.g. typed name only) on the map.
+async function autoLocateMissing(){
+  const todo = shops.filter(s => !hasLoc(s) && !s.locateTried);
+  if(!todo.length) return;
+  let found = 0;
+  for(const s of todo){
+    const p = await lookupPlace(s.name, s.area);
+    const next = p
+      ? { ...s, lat: p.lat, lng: p.lng, placeId: p.placeId, address: p.address, mapsUrl: p.mapsUrl, area: s.area || p.area, locateTried: false }
+      : { ...s, locateTried: true };
+    if(p) found++;
+    try{ await store.put(next); }catch{}
+    shops = shops.map(x => x.id === s.id ? next : x);
+  }
+  renderMarkers(); renderPanel();
+  if(found) toast(`${found}軒のお店を地図に表示しました`);
 }
 function showSetup(msg){
   $("#setup").hidden = false;
@@ -640,6 +681,7 @@ async function searchPlaces(){
 }
 function pickPlace(p, name, addr){
   const loc = p.location;
+  draft.noAutoLoc = false;
   draft.place = { placeId: p.id, lat: loc.lat(), lng: loc.lng(), address: addr, mapsUrl: p.googleMapsURI || "", label: addr };
   if(!$("#f-name").value.trim() || editingId == null) $("#f-name").value = name;
   const area = areaFromComponents(p.addressComponents);
@@ -652,7 +694,7 @@ function renderPicked(){
   if(!draft.place){ box.hidden = true; box.replaceChildren(); return; }
   box.hidden = false;
   box.replaceChildren(el("span", {}, "地図の位置：", draft.place.label || "設定済み"),
-    el("button", { type: "button", class: "ghost small danger", onclick: () => { draft.place = null; renderPicked(); } }, "外す"));
+    el("button", { type: "button", class: "ghost small danger", onclick: () => { draft.place = null; draft.noAutoLoc = true; renderPicked(); } }, "外す"));
 }
 $("#placeSearch").addEventListener("click", searchPlaces);
 $("#placeQ").addEventListener("keydown", e => { if(e.key === "Enter" && !e.isComposing){ e.preventDefault(); searchPlaces(); } });
@@ -717,7 +759,14 @@ $("#shopForm").addEventListener("submit", async e => {
   if(!name){ $("#f-name").focus(); return; }
   if(draft.uploading){ toast("写真の追加が終わるまでお待ちください"); return; }
   const prev = shops.find(s => s.id === editingId);
-  const pl = draft.place;
+  let pl = draft.place;
+  $("#saveBtn").disabled = true;
+  if(!pl && !draft.noAutoLoc && G){
+    // No place was picked from the search results: look the shop up by name so it still gets a pin.
+    toast("地図上の場所を探しています…");
+    pl = await lookupPlace(name, $("#f-area").value.trim());
+    if(pl && !$("#f-area").value.trim() && pl.area) $("#f-area").value = pl.area;
+  }
   const shop = {
     id: editingId || "s" + uid(),
     name, area: $("#f-area").value.trim(), genre: draft.genre, rating: draft.rating,
@@ -726,15 +775,15 @@ $("#shopForm").addEventListener("submit", async e => {
     placeId: pl?.placeId || "", address: pl?.address || "", mapsUrl: pl?.mapsUrl || "",
     photos: draft.photos.map(p => ({ id: p.id, label: p.label })),
     createdAt: prev?.createdAt || Date.now(), updatedAt: Date.now(),
+    locateTried: !pl,
   };
-  $("#saveBtn").disabled = true;
   try{
     await store.put(shop);
     const kept = new Set(shop.photos.map(p => p.id));
     dropPhotos([...(prev?.photos || []).map(p => p.id), ...draft.newPhotos].filter(id => !kept.has(id)));
     draft.newPhotos = [];
     shops = prev ? shops.map(s => s.id === shop.id ? shop : s) : [...shops, shop];
-    toast(prev ? "更新しました" : "記録しました");
+    toast((prev ? "更新しました" : "記録しました") + (hasLoc(shop) ? "" : "（地図上の場所は見つかりませんでした。「編集」でお店を検索して選んでください）"));
     closeForm(true);
     openDetail(shop.id, true);
   }catch{
