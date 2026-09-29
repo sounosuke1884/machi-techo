@@ -243,12 +243,55 @@ document.querySelectorAll("[data-jump]").forEach(b => b.addEventListener("click"
 }));
 
 // ================= markers =================
+// Normalize for search: full/half width, case, katakana → hiragana, and ignore spaces and dots.
+const toHiragana = s => String(s || "").normalize("NFKC").replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+const norm = s => toHiragana(s).toLowerCase().replace(/[\s・･.．]/g, "");
 function filtered(){
-  const q = view.q.toLowerCase();
+  const q = norm(view.q);
   return shops.filter(s =>
     (view.area === "all" || areaOf(s) === view.area) &&
     (!view.genre || s.genre === view.genre) &&
-    (!q || [s.name, s.memo, s.area, s.address].join(" ").toLowerCase().includes(q)));
+    (!q || norm([s.name, s.kana, s.memo, s.area, s.address].join(" ")).includes(q)));
+}
+
+// ================= automatic readings (kuromoji dictionary) =================
+// Shop names in kanji get a hiragana reading so they can be found by typing hiragana.
+const KUROMOJI = "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/";
+let tokenizerP = null;
+function getTokenizer(){
+  if(tokenizerP) return tokenizerP;
+  tokenizerP = new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = KUROMOJI + "build/kuromoji.js";
+    s.onload = () => window.kuromoji.builder({ dicPath: KUROMOJI + "dict/" }).build((err, t) => err ? rej(err) : res(t));
+    s.onerror = rej;
+    document.head.append(s);
+  }).catch(e => { tokenizerP = null; throw e; });
+  return tokenizerP;
+}
+const hasKanji = s => /[㐀-鿿豈-﫿々〆ヶ]/.test(s || "");
+async function readingOf(name){
+  if(!hasKanji(name)) return toHiragana(name);
+  const t = await getTokenizer();
+  return toHiragana(t.tokenize(name).map(x => x.reading && x.reading !== "*" ? x.reading : x.surface_form).join(""));
+}
+// Give readings to shops that don't have one yet, quietly in the background.
+let kanaRunning = false;
+async function fillReadings(){
+  if(kanaRunning) return;
+  kanaRunning = true;
+  try{
+    for(const s of shops.filter(x => !x.kana && x.name)){
+      let kana;
+      try{ kana = await readingOf(s.name); }catch{ break; }   // dictionary unavailable (offline): try next time
+      const cur = shops.find(x => x.id === s.id);
+      if(!cur || cur.name !== s.name) continue;               // edited meanwhile
+      const next = { ...cur, kana };
+      try{ await store.put(next); }catch{}
+      shops = shops.map(x => x.id === s.id ? next : x);
+    }
+    if(view.q) renderResults();
+  }finally{ kanaRunning = false; }
 }
 function renderMarkers(){
   if(!map) return;
@@ -892,6 +935,8 @@ $("#shopForm").addEventListener("submit", async e => {
     photos: draft.photos.map(p => ({ id: p.id, label: p.label })),
     createdAt: prev?.createdAt || Date.now(), updatedAt: Date.now(),
     locateTried: !pl,
+    // Keep the reading while the name is unchanged; a new name gets a fresh reading in the background.
+    kana: prev && prev.name === name ? prev.kana || "" : "",
   };
   try{
     await store.put(shop);
@@ -902,6 +947,7 @@ $("#shopForm").addEventListener("submit", async e => {
     toast((prev ? "更新しました" : "記録しました") + (hasLoc(shop) ? "" : "（地図上の場所は見つかりませんでした。「編集」でお店を検索して選んでください）"));
     closeForm(true);
     openDetail(shop.id, true);
+    fillReadings();
   }catch{
     toast("保存できませんでした。端末の空き容量を確認してください。");
   }finally{ $("#saveBtn").disabled = false; }
@@ -944,6 +990,7 @@ $("#importInput").addEventListener("change", async e => {
     shops = await store.all();
     toast(`${j.shops.length}軒を読み込みました`);
     backToList();
+    fillReadings();
   }catch{ toast("このファイルは読み込めませんでした"); }
 });
 $("#keyBtn").addEventListener("click", () => { menu.hidden = true; showSetup(); });
@@ -954,4 +1001,6 @@ $("#keyBtn").addEventListener("click", () => { menu.hidden = true; showSetup(); 
   try{ shops = await store.all(); }catch{ shops = []; toast("端末に保存できない状態です（プライベートブラウズでは使えません）"); }
   renderPanel();
   initMap();
+  // Load the reading dictionary after the map has had time to appear.
+  if(shops.some(s => !s.kana)) setTimeout(fillReadings, 2500);
 })();
