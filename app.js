@@ -272,10 +272,57 @@ function setSheet(size){
   $("#sheet").dataset.size = size;
   document.documentElement.style.setProperty("--sheet-h", SHEET[size]);
 }
+const SIZES = ["peek", "half", "full"];
+const sheetPx = size => SHEET[size].endsWith("vh") ? innerHeight * parseFloat(SHEET[size]) / 100 : parseFloat(SHEET[size]);
+let sheetDragged = false;
 $("#handle").addEventListener("click", () => {
+  if(sheetDragged){ sheetDragged = false; return; }   // the tap was the end of a swipe
   const cur = $("#sheet").dataset.size;
   setSheet(cur === "peek" ? "half" : cur === "half" ? "full" : "peek");
 });
+
+// Swipe the sheet up/down by its handle or title row; it follows the finger, then snaps to the nearest size.
+(function sheetSwipe(){
+  const sheet = $("#sheet"), app = $("#app");
+  let drag = null;
+  sheet.addEventListener("pointerdown", e => {
+    if(!e.target.closest("#handle, .sheet-head")) return;
+    drag = { y0: e.clientY, h0: sheet.getBoundingClientRect().height, y: e.clientY, t: e.timeStamp, v: 0, moved: false, id: e.pointerId };
+  });
+  sheet.addEventListener("pointermove", e => {
+    if(!drag || e.pointerId !== drag.id) return;
+    const dy = e.clientY - drag.y0;
+    if(!drag.moved){
+      if(Math.abs(dy) < 6) return;
+      drag.moved = true;
+      app.classList.add("sheet-dragging");
+      try{ sheet.setPointerCapture(e.pointerId); }catch{}
+    }
+    const h = Math.min(sheetPx("full"), Math.max(sheetPx("peek") * 0.75, drag.h0 - dy));
+    document.documentElement.style.setProperty("--sheet-h", h + "px");
+    const dt = e.timeStamp - drag.t;
+    if(dt > 0) drag.v = (e.clientY - drag.y) / dt;    // px per ms, positive = moving down
+    drag.y = e.clientY; drag.t = e.timeStamp;
+  });
+  const end = e => {
+    if(!drag || e.pointerId !== drag.id) return;
+    const d = drag; drag = null;
+    if(!d.moved) return;
+    sheetDragged = true;
+    setTimeout(() => { sheetDragged = false; }, 350);
+    app.classList.remove("sheet-dragging");
+    const h = sheet.getBoundingClientRect().height;
+    let i = SIZES.reduce((best, s, k) => Math.abs(sheetPx(s) - h) < Math.abs(sheetPx(SIZES[best]) - h) ? k : best, 0);
+    // A quick flick moves one step in its direction from where the swipe started.
+    if(Math.abs(d.v) > 0.5){
+      const start = SIZES.indexOf(sheet.dataset.size);
+      i = Math.max(0, Math.min(SIZES.length - 1, start + (d.v < 0 ? 1 : -1)));
+    }
+    setSheet(SIZES[i]);
+  };
+  sheet.addEventListener("pointerup", end);
+  sheet.addEventListener("pointercancel", end);
+})();
 
 const areaOf = s => (s.area || "").trim() || "エリア未設定";
 function areas(){
