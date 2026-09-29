@@ -35,6 +35,9 @@ function el(tag, attrs = {}, ...kids){
 let toastT;
 function toast(msg){
   const t = $("#toast"); t.textContent = msg; t.hidden = false;
+  // An open <dialog> sits above everything else, so show the message inside it.
+  const d = $("#formDlg");
+  (d && d.open ? d : document.body).append(t);
   clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 2600);
 }
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -164,20 +167,15 @@ async function initMap(){
 // Find a shop on Google Maps from its name (and area), biased to central Fukuoka.
 async function lookupPlace(name, area){
   if(!G) return null;
-  const fields = ["id", "displayName", "formattedAddress", "location", "googleMapsURI", "addressComponents"];
   for(const textQuery of [[name, area].filter(Boolean).join(" "), name]){
     try{
-      const { places } = await G.places.Place.searchByText({
-        textQuery, fields, language: "ja", region: "jp", maxResultCount: 1,
-        locationBias: { center: { lat: HOME.lat, lng: HOME.lng }, radius: 30000 },
-      });
-      const p = places?.[0];
+      const p = (await textSearch(textQuery))[0];
       if(p?.location) return {
         placeId: p.id, lat: p.location.lat(), lng: p.location.lng(),
-        address: (p.formattedAddress || "").replace(/^日本、?\s*(〒\d{3}-\d{4}\s*)?/, ""),
+        address: cleanAddr(p.formattedAddress),
         mapsUrl: p.googleMapsURI || "", area: areaFromComponents(p.addressComponents),
       };
-    }catch{ /* try the next query */ }
+    }catch(e){ console.error(e); /* try the next query */ }
     if(!area) break;
   }
   return null;
@@ -652,31 +650,84 @@ function areaFromComponents(comps){
   // 福岡市の住所は「中央区 → 天神」の順。町名（天神・大名・博多駅前など）を優先します。
   return (find("sublocality_level_2") || find("sublocality_level_1") || find("locality")).replace(/[0-9０-９一二三四五六七八九十]+丁目$/, "");
 }
+const PLACE_FIELDS = ["id", "displayName", "formattedAddress", "location", "googleMapsURI", "addressComponents"];
+const cleanAddr = a => (a || "").replace(/^日本、?\s*(〒\d{3}-\d{4}\s*)?/, "");
+function searchBias(){
+  const center = map ? map.getCenter().toJSON() : { lat: HOME.lat, lng: HOME.lng };
+  return { center, radius: 20000 };
+}
+// Explain a Places failure in words the user can act on (the raw reason is kept for troubleshooting).
+function placesErrorText(e){
+  const raw = String(e?.message || e || "");
+  if(/not.*(enabled|activated|been used)|API_NOT_ACTIVATED|SERVICE_DISABLED/i.test(raw))
+    return "Google Cloud で「Places API (New)」が有効になっていません。APIライブラリで有効にしてください。";
+  if(/referer|referrer|PERMISSION|denied|not authorized|blocked/i.test(raw))
+    return "APIキーの制限で検索が止められています。キーの「APIの制限」に「Places API (New)」が入っているか確認してください。";
+  return "お店を検索できませんでした。（詳細：" + (raw.slice(0, 120) || "不明なエラー") + "）";
+}
+function candMsg(text, isErr){
+  $("#cands").replaceChildren(el("li", {}, el("p", { class: isErr ? "cand-msg err" : "cand-msg" }, text)));
+}
+// Text search with a fallback to a minimal request, in case an option is rejected by the API version.
+async function textSearch(textQuery){
+  try{
+    const { places } = await G.places.Place.searchByText({ textQuery, fields: PLACE_FIELDS, language: "ja", region: "jp", locationBias: searchBias() });
+    return places || [];
+  }catch(e){
+    const { places } = await G.places.Place.searchByText({ textQuery, fields: PLACE_FIELDS, language: "ja" });
+    return places || [];
+  }
+}
+function showPlaces(places){
+  const list = $("#cands");
+  list.replaceChildren();
+  if(!places.length){ candMsg("見つかりませんでした。「天神 〇〇」のように地名を足して試してください。"); return; }
+  for(const p of places.slice(0, 6)){
+    const name = p.displayName || "", addr = cleanAddr(p.formattedAddress);
+    list.append(el("li", {}, el("button", { type: "button", onclick: () => pickPlace(p, name, addr) },
+      el("span", {}, name), el("small", {}, addr))));
+  }
+}
 async function searchPlaces(){
   const q = $("#placeQ").value.trim();
   if(!q){ $("#placeQ").focus(); return; }
-  if(!G){ toast("地図の読み込みが終わっていません"); return; }
-  const list = $("#cands");
-  list.replaceChildren(el("li", {}, el("button", { type: "button", disabled: "" }, "検索中…")));
+  if(!G){ candMsg("地図の読み込みが終わっていません。少し待ってからもう一度押してください。", true); return; }
+  acSeq++;   // cancel pending suggestions
+  candMsg("検索中…");
+  try{ showPlaces(await textSearch(q)); }
+  catch(e){ console.error(e); candMsg(placesErrorText(e), true); }
+}
+
+// Suggestions while typing (Places Autocomplete).
+let acSeq = 0, acTimer = null, acToken = null;
+async function suggest(){
+  const q = $("#placeQ").value.trim();
+  const seq = ++acSeq;
+  if(q.length < 2 || !G){ if(!q) $("#cands").replaceChildren(); return; }
   try{
-    const center = map ? map.getCenter().toJSON() : { lat: HOME.lat, lng: HOME.lng };
-    const { places } = await G.places.Place.searchByText({
-      textQuery: q,
-      fields: ["id", "displayName", "formattedAddress", "location", "googleMapsURI", "addressComponents"],
-      language: "ja", region: "jp", maxResultCount: 6,
-      locationBias: { center, radius: 20000 },
+    acToken = acToken || new G.places.AutocompleteSessionToken();
+    const { suggestions } = await G.places.AutocompleteSuggestion.fetchAutocompleteSuggestions({
+      input: q, sessionToken: acToken, language: "ja", region: "jp", locationBias: searchBias(),
     });
-    list.replaceChildren();
-    if(!places?.length){ list.append(el("li", {}, el("button", { type: "button", disabled: "" }, "見つかりませんでした。別の言葉で試してください。"))); return; }
-    for(const p of places){
-      const name = p.displayName || "";
-      const addr = (p.formattedAddress || "").replace(/^日本、?\s*(〒\d{3}-\d{4}\s*)?/, "");
-      list.append(el("li", {}, el("button", { type: "button", onclick: () => pickPlace(p, name, addr) },
-        el("span", {}, name), el("small", {}, addr))));
+    if(seq !== acSeq) return;
+    const preds = (suggestions || []).map(s => s.placePrediction).filter(Boolean).slice(0, 6);
+    const list = $("#cands"); list.replaceChildren();
+    if(!preds.length){ candMsg("候補がありません。「検索」を押すと詳しく探します。"); return; }
+    for(const pr of preds){
+      const main = pr.mainText?.text || pr.text?.text || "", sub = cleanAddr(pr.secondaryText?.text);
+      list.append(el("li", {}, el("button", { type: "button", onclick: async () => {
+        candMsg("読み込み中…");
+        try{
+          const place = pr.toPlace();
+          await place.fetchFields({ fields: PLACE_FIELDS });
+          acToken = null;
+          pickPlace(place, place.displayName || main, cleanAddr(place.formattedAddress) || sub);
+        }catch(e){ console.error(e); candMsg(placesErrorText(e), true); }
+      } }, el("span", {}, main), el("small", {}, sub))));
     }
   }catch(e){
-    list.replaceChildren();
-    toast("お店を検索できませんでした。Google Cloud で「Places API (New)」が有効か確認してください。");
+    // Autocomplete unavailable: stay quiet here; the 検索 button reports the reason.
+    console.error(e);
   }
 }
 function pickPlace(p, name, addr){
@@ -697,7 +748,8 @@ function renderPicked(){
     el("button", { type: "button", class: "ghost small danger", onclick: () => { draft.place = null; draft.noAutoLoc = true; renderPicked(); } }, "外す"));
 }
 $("#placeSearch").addEventListener("click", searchPlaces);
-$("#placeQ").addEventListener("keydown", e => { if(e.key === "Enter" && !e.isComposing){ e.preventDefault(); searchPlaces(); } });
+$("#placeQ").addEventListener("keydown", e => { if(e.key === "Enter" && !e.isComposing && e.keyCode !== 229){ e.preventDefault(); searchPlaces(); } });
+$("#placeQ").addEventListener("input", () => { clearTimeout(acTimer); acTimer = setTimeout(suggest, 300); });
 $("#useHere").addEventListener("click", async () => {
   try{
     const p = await getPosition();
