@@ -231,7 +231,7 @@ function showMe(){
   if(!meMarker){
     meMarker = new G.marker.AdvancedMarkerElement({ map, position: me, content: el("div", { class: "me" }), title: "現在地", zIndex: 1000 });
   }else meMarker.position = me;
-  if(panel.mode === "list") renderPanel();
+  if(panel.mode === "list") renderResults();
 }
 $("#locateBtn").addEventListener("click", async () => {
   try{ await getPosition(); map?.panTo(me); map?.setZoom(16); }
@@ -339,22 +339,30 @@ function renderPanel(){
   else body.append(listView());
 }
 
-function listView(){
-  const wrap = el("div", { class: "stack" });
-  const items = filtered();
-  const origin = me;
+function sortedItems(){
+  const items = filtered(), origin = me;
   items.sort((a, b) => origin && hasLoc(a) && hasLoc(b)
     ? haversine(origin, a) - haversine(origin, b)
     : (b.rating || 0) - (a.rating || 0) || (b.createdAt || 0) - (a.createdAt || 0));
+  return items;
+}
 
-  wrap.append(el("div", { class: "sheet-head" },
-    el("h2", {}, "記録したお店"),
-    el("span", { class: "count" }, `${items.length} / ${shops.length}軒` + (origin ? "・近い順" : ""))));
+// The list is built once as a shell (title, filters, search box); typing only swaps the results below,
+// so the search box is never recreated mid-typing (keeps Japanese input and held backspace working).
+function listView(){
+  const wrap = el("div", { class: "stack" });
+  wrap.append(el("div", { class: "sheet-head" }, el("h2", {}, "記録したお店"), el("span", { class: "count", id: "listCount" })));
 
   if(shops.length){
     const f = el("div", { class: "filters" });
-    const q = el("input", { type: "search", placeholder: "店名・メモで検索", value: view.q, id: "listQ" });
-    q.addEventListener("input", e => { view.q = e.target.value; refresh(true); });
+    const q = el("input", { type: "search", placeholder: "店名・メモで検索", value: view.q, id: "listQ", enterkeyhint: "search" });
+    let markerTimer = null;
+    q.addEventListener("input", e => {
+      view.q = e.target.value;
+      renderResults();
+      clearTimeout(markerTimer);
+      markerTimer = setTimeout(renderMarkers, 300);
+    });
     const tabs = el("div", { class: "row", role: "group", "aria-label": "エリア" });
     for(const [key, label] of [["all", "すべて"], ...areas().map(([a]) => [a, a])]){
       tabs.append(el("button", { type: "button", class: "tab", "aria-pressed": String(view.area === key),
@@ -369,12 +377,23 @@ function listView(){
     f.append(tabs, gs, q);
     wrap.append(f);
   }
+  wrap.append(el("div", { id: "listResults" }));
+  queueMicrotask(renderResults);
+  return wrap;
+}
 
+function renderResults(){
+  const box = $("#listResults");
+  if(!box) return;
+  const items = sortedItems(), origin = me;
+  const count = $("#listCount");
+  if(count) count.textContent = `${items.length} / ${shops.length}軒` + (origin ? "・近い順" : "");
+  box.replaceChildren();
   if(!items.length){
-    wrap.append(el("p", { class: "empty" }, shops.length
+    box.append(el("p", { class: "empty" }, shops.length
       ? "条件に合うお店がありません。"
       : "まだ記録がありません。「＋ 記録する」から、よく行くお店を追加しましょう。"));
-    return wrap;
+    return;
   }
   const ul = el("ul", { class: "items" });
   for(const s of items){
@@ -385,14 +404,12 @@ function listView(){
       el("span", { class: "dist" }, origin && hasLoc(s) ? fmtDist(haversine(origin, s)) : hasLoc(s) ? "" : "位置なし"),
       el("span", { class: "meta" }, s.genre ? el("span", { class: "genre" }, s.genre) : null, areaOf(s), starsEl(s.rating || 0)))));
   }
-  wrap.append(ul);
-  return wrap;
+  box.append(ul);
 }
 
-// Refresh list + markers; keep the search box focused while typing.
-function refresh(keepFocus){
+// Refresh list + markers (used by the area/genre buttons).
+function refresh(){
   renderPanel(); renderMarkers();
-  if(keepFocus){ const q = $("#listQ"); if(q){ q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
 }
 
 let pendingDelete = null;
