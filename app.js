@@ -662,7 +662,7 @@ function placesErrorText(e){
   if(/not.*(enabled|activated|been used)|API_NOT_ACTIVATED|SERVICE_DISABLED/i.test(raw))
     return "Google Cloud で「Places API (New)」が有効になっていません。APIライブラリで有効にしてください。";
   if(/referer|referrer|PERMISSION|denied|not authorized|blocked/i.test(raw))
-    return "APIキーの制限で検索が止められています。キーの「APIの制限」に「Places API (New)」が入っているか確認してください。";
+    return "APIキーの制限で検索が止められています。キーの「ウェブサイトの制限」と「APIの制限」を確認してください。（詳細：" + raw.slice(0, 160) + "）";
   return "お店を検索できませんでした。（詳細：" + (raw.slice(0, 120) || "不明なエラー") + "）";
 }
 function candMsg(text, isErr){
