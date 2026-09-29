@@ -108,7 +108,9 @@ textarea{min-height:64px;resize:vertical}
 .go{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .go button{padding:12px 8px;font-weight:700;border-radius:12px}
 .go .walk{background:var(--accent-soft);border-color:var(--accent-soft)}
-.go .transit{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.go .transit{background:var(--accent);color:var(--accent-ink);border:1px solid var(--accent);display:flex;align-items:center;justify-content:center;text-align:center;padding:12px 8px;font-weight:700;border-radius:12px;text-decoration:none;font-size:14px}
+.cmp-small{font-size:14px!important}
+.primary-link{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
 .ops{display:flex;gap:6px;flex-wrap:wrap}
 .ops a,.ops button{font-size:13px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--ink);text-decoration:none}
 .thumbs{display:flex;gap:6px;overflow-x:auto}

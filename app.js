@@ -502,7 +502,7 @@ function detailView(){
   if(hasLoc(s)){
     w.append(el("div", { class: "go" },
       el("button", { type: "button", class: "walk", onclick: () => startRoute(s, "WALK") }, "歩いて行く"),
-      el("button", { type: "button", class: "transit", onclick: () => startRoute(s, "TRANSIT") }, "電車・バスで行く")));
+      el("a", { class: "transit", href: dirUrl(s, "TRANSIT"), target: "_blank", rel: "noopener" }, "電車・バスで行く（Googleマップ）")));
   }else{
     w.append(el("p", { class: "hint" }, "このお店は位置が登録されていません。「編集」からお店を検索すると地図に表示され、行き方も調べられます。"));
   }
@@ -529,74 +529,53 @@ async function deleteShop(s){
 }
 
 // ================= routes (Routes API) =================
-// Walking and transit are looked up together so they can be compared side by side.
-// For short trips Google answers a transit request with a walk-only route; those are
-// treated as "walking is faster" rather than shown as a transit route.
-let routeState = null;   // { shop, mode, loading, error, walk, transit[], sel, walkErr, transitErr, walkFaster }
+// Walking routes are computed and drawn in the app. Train/bus routes open in the Google Maps app,
+// because the Routes API has no transit data for Japan.
+let routeState = null;   // { shop, mode, loading, error, walk, walkErr }
 let routeOrigin = null;
 const routeSteps = r => r?.legs?.flatMap(l => l.steps || []) || [];
-const usesTransit = r => routeSteps(r).some(x => x.travelMode === "TRANSIT");
 const isCurrentRoute = s => panel.mode === "route" && panel.id === s.id;
 const hhmm = d => `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
 
 async function startRoute(s, mode){
   panel = { ...panel, mode: "route", id: s.id, routeMode: mode };
-  routeState = { shop: s, mode, loading: true, transit: [], sel: 0 };
+  routeState = { shop: s, mode, loading: true };
   clearRoute();
   setSheet("half");
   renderPanel();
   let origin;
   try{ origin = await getPosition(); }
   catch(e){
-    if(isCurrentRoute(s)){ routeState = { shop: s, mode, error: e.message, transit: [], sel: 0 }; renderPanel(); }
+    if(isCurrentRoute(s)){ routeState = { shop: s, mode, error: e.message }; renderPanel(); }
     return;
   }
-  const [w, t] = await Promise.allSettled([computeRoutes(origin, s, "WALK"), computeRoutes(origin, s, "TRANSIT")]);
+  // Google's Routes API has no train/bus data for Japan (only the Google Maps app does),
+  // so only walking is computed here; transit is handed off to the Google Maps app.
+  let walk = null, walkErr = "";
+  try{ walk = (await computeRoutes(origin, s, "WALK"))[0] || null; }
+  catch(e){ walkErr = e.message; }
   if(!isCurrentRoute(s)) return;   // user moved on
-  let all = t.status === "fulfilled" ? t.value : [];
-  if(t.status === "fulfilled" && !all.some(usesTransit)){
-    // Google suggested walking only; ask again preferring less walking to get an actual train/bus route.
-    try{ all = [...all, ...await computeRoutes(origin, s, "TRANSIT", { lessWalking: true })]; }catch{}
-    if(!isCurrentRoute(s)) return;
-  }
   routeOrigin = origin;
-  routeState = {
-    shop: s, mode: panel.routeMode, sel: 0,
-    walk: w.status === "fulfilled" ? w.value[0] || null : null,
-    transit: all.filter(usesTransit).slice(0, 3),
-    walkErr: w.status === "rejected" ? w.reason.message : "",
-    transitErr: t.status === "rejected" ? t.reason.message : "",
-    walkFaster: t.status === "fulfilled" && !all.some(usesTransit),
-  };
-  if(!routeState.walk && !routeState.transit.length){
-    routeState.error = routeState.transitErr || routeState.walkErr || "ルートが見つかりませんでした。";
-  }
+  routeState = { shop: s, mode: panel.routeMode, walk, walkErr };
   showSelectedRoute();
   renderPanel();
 }
-function selectedRoute(){
-  const st = routeState;
-  return st.mode === "WALK" ? st.walk : st.transit[st.sel] || null;
-}
+// The walking route stays drawn on the map on both tabs.
 function showSelectedRoute(){
-  const r = selectedRoute();
+  const r = routeState.walk;
   if(r && routeOrigin) drawRoute(r, routeOrigin, routeState.shop); else clearRoute();
 }
 function setRouteMode(mode){
   routeState.mode = mode; panel.routeMode = mode;
-  if(!routeState.loading) showSelectedRoute();
   renderPanel();
 }
-function setRouteSel(i){ routeState.sel = i; showSelectedRoute(); renderPanel(); }
 
-async function computeRoutes(origin, s, mode, opts = {}){
+async function computeRoutes(origin, s, mode){
   const body = {
     origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lng } } },
     destination: s.placeId ? { placeId: s.placeId } : { location: { latLng: { latitude: s.lat, longitude: s.lng } } },
     travelMode: mode, languageCode: "ja", units: "METRIC",
   };
-  if(mode === "TRANSIT") body.computeAlternativeRoutes = true;
-  if(opts.lessWalking) body.transitPreferences = { routingPreference: "LESS_WALKING", allowedTravelModes: ["BUS", "SUBWAY", "TRAIN", "LIGHT_RAIL", "RAIL"] };
   const fields = [
     "routes.duration", "routes.distanceMeters", "routes.polyline.encodedPolyline", "routes.localizedValues",
     "routes.travelAdvisory.transitFare",
@@ -622,27 +601,6 @@ async function computeRoutes(origin, s, mode, opts = {}){
   const routes = j.routes || [];
   if(!routes.length && mode === "WALK") throw new Error("徒歩ルートが見つかりませんでした。");
   return routes;
-}
-
-// Facts about one transit route, for the option cards and the summary.
-function transitFacts(r){
-  const steps = routeSteps(r);
-  const rides = steps.filter(x => x.travelMode === "TRANSIT");
-  const firstIdx = steps.findIndex(x => x.travelMode === "TRANSIT");
-  const walkBefore = steps.slice(0, Math.max(0, firstIdx)).reduce((n, x) => n + secs(x.staticDuration), 0);
-  const firstDep = rides[0]?.transitDetails?.stopDetails?.departureTime;
-  const leave = firstDep ? new Date(new Date(firstDep).getTime() - walkBefore * 1000) : new Date();
-  const lastArr = rides[rides.length - 1]?.transitDetails?.stopDetails?.arrivalTime;
-  const walkAfter = steps.slice(steps.lastIndexOf(rides[rides.length - 1]) + 1).reduce((n, x) => n + secs(x.staticDuration), 0);
-  const arrive = lastArr ? new Date(new Date(lastArr).getTime() + walkAfter * 1000) : new Date(Date.now() + secs(r.duration) * 1000);
-  const fareObj = r.travelAdvisory?.transitFare;
-  const fare = r.localizedValues?.transitFare?.text || (fareObj?.units ? `${Number(fareObj.units).toLocaleString()}円` : "");
-  const walkTotal = steps.filter(x => x.travelMode !== "TRANSIT").reduce((n, x) => n + secs(x.staticDuration), 0);
-  return {
-    leave, arrive, fare, walkTotal, transfers: Math.max(0, rides.length - 1),
-    total: Math.max(0, (arrive - Date.now()) / 1000) || secs(r.duration),
-    lines: rides.map(x => { const l = x.transitDetails?.transitLine || {}; return { name: l.nameShort || l.name || l.vehicle?.name?.text || "", color: l.color || "#23466E", text: l.textColor || "#fff" }; }),
-  };
 }
 
 function drawRoute(route, origin, s){
@@ -682,27 +640,22 @@ function routeView(){
   const w = el("div", { class: "detail" });
   w.append(el("button", { type: "button", class: "ghost back", onclick: () => openDetail(s.id, false) }, `← ${s.name}に戻る`));
 
-  // Side-by-side comparison; each half is also the switch for the details below.
+  // Two tabs: walking is shown here; trains/buses open in the Google Maps app.
   const walkSec = st.walk ? secs(st.walk.duration) : null;
-  const bestTransit = st.transit.length ? Math.min(...st.transit.map(r => transitFacts(r).total)) : null;
-  const cmpVal = (loading, sec, fallback) => loading ? "調べています…" : sec != null ? fmtMin(sec) : fallback;
   w.append(el("div", { class: "compare", role: "group", "aria-label": "移動手段" },
     el("button", { type: "button", "aria-pressed": String(st.mode === "WALK"), onclick: () => setRouteMode("WALK") },
       el("span", { class: "cmp-label" }, "徒歩"),
-      el("strong", {}, cmpVal(st.loading, walkSec, "—")),
-      !st.loading && walkSec != null && bestTransit != null && walkSec <= bestTransit ? el("span", { class: "cmp-badge" }, "早い") : null),
+      el("strong", {}, st.loading ? "調べています…" : walkSec != null ? fmtMin(walkSec) : "—")),
     el("button", { type: "button", "aria-pressed": String(st.mode === "TRANSIT"), onclick: () => setRouteMode("TRANSIT") },
       el("span", { class: "cmp-label" }, "電車・バス"),
-      el("strong", {}, cmpVal(st.loading, bestTransit, st.walkFaster ? "ルートなし" : "—")),
-      !st.loading && bestTransit != null && (walkSec == null || bestTransit < walkSec) ? el("span", { class: "cmp-badge" }, "早い") : null)));
+      el("strong", { class: "cmp-small" }, "Googleマップで確認"))));
 
-  const nav = el("a", { class: "navlink", href: dirUrl(s, st.mode), target: "_blank", rel: "noopener" }, "Googleマップアプリでナビを開始");
-  if(st.loading){ w.append(el("p", { class: "hint" }, "現在地から徒歩と電車・バスのルートを調べています…")); return w; }
+  if(st.mode === "TRANSIT"){ w.append(transitDetail(st, walkSec)); return w; }
+
+  const nav = el("a", { class: "navlink", href: dirUrl(s, "WALK"), target: "_blank", rel: "noopener" }, "Googleマップアプリで徒歩ナビを開始");
+  if(st.loading){ w.append(el("p", { class: "hint" }, "現在地からの徒歩ルートを調べています…")); return w; }
   if(st.error){ w.append(el("p", { class: "err" }, st.error), nav); return w; }
-
-  if(st.mode === "WALK") w.append(walkDetail(st));
-  else w.append(transitDetail(st, walkSec));
-  w.append(nav);
+  w.append(walkDetail(st), nav);
   return w;
 }
 
@@ -726,67 +679,17 @@ function walkDetail(st){
   return box;
 }
 
+// Google provides Japanese train/bus timetables only inside its own Maps app, so hand off to it.
 function transitDetail(st, walkSec){
+  const s = st.shop;
   const box = el("div", { class: "stack" });
-  if(!st.transit.length){
-    if(st.walkFaster){
-      box.append(el("p", { class: "notice" }, "近すぎて、電車・バスを使うルートが見つかりませんでした。この距離は歩いたほうが早いです。"),
-        el("button", { type: "button", onclick: () => setRouteMode("WALK") }, `徒歩ルートを見る（${walkSec != null ? fmtMin(walkSec) : ""}）`));
-    }else box.append(el("p", { class: "err" }, st.transitErr || "電車・バスのルートが見つかりませんでした。"));
-    return box;
+  box.append(el("p", { class: "notice" },
+    "日本の電車・バスの時刻や乗り換えは、Googleマップアプリでしか調べられません。下のボタンで、現在地から「", s.name, "」までの電車・バスのルートを開きます。"));
+  box.append(el("a", { class: "navlink primary-link", href: dirUrl(s, "TRANSIT"), target: "_blank", rel: "noopener" }, "Googleマップで電車・バスのルートを見る"));
+  if(walkSec != null){
+    box.append(el("p", { class: "hint" }, `参考：歩くと${fmtMin(walkSec)}（${fmtDist(st.walk.distanceMeters || 0)}）です。`,
+      walkSec <= 15 * 60 ? "この距離なら歩いたほうが早いことが多いです。" : ""));
   }
-  const facts = st.transit.map(transitFacts);
-  if(walkSec != null && walkSec <= Math.min(...facts.map(f => f.total))){
-    box.append(el("p", { class: "notice" }, `歩いたほうが早く着きます（徒歩 ${fmtMin(walkSec)}）。電車・バスを使う場合のルートです。`));
-  }
-  // Route options
-  if(facts.length > 1){
-    const opts = el("div", { class: "opts", role: "group", "aria-label": "ルートの候補" });
-    facts.forEach((f, i) => {
-      opts.append(el("button", { type: "button", class: "opt", "aria-pressed": String(i === st.sel), onclick: () => setRouteSel(i) },
-        el("span", { class: "opt-time" }, `${hhmm(f.leave)}発 → ${hhmm(f.arrive)}着`),
-        el("span", { class: "opt-meta" }, [fmtMin(f.total), `乗換${f.transfers}回`, f.fare].filter(Boolean).join("・")),
-        el("span", { class: "opt-lines" }, f.lines.map(l => el("span", { class: "line-chip", style: `background:${l.color};color:${l.text}` }, l.name)))));
-    });
-    box.append(opts);
-  }
-  const r = st.transit[st.sel], f = facts[st.sel];
-  box.append(el("div", { class: "route-sum" },
-    el("strong", {}, fmtMin(f.total)),
-    el("span", {}, [`${hhmm(f.leave)}に出発`, `${hhmm(f.arrive)}ごろ到着`, `乗換${f.transfers}回`, f.fare, `歩く時間 計${fmtMin(f.walkTotal)}`].filter(Boolean).join("・"))));
-
-  // Step by step: walking segments merged, each ride with line, direction, stops and times.
-  const steps = routeSteps(r);
-  const ol = el("ol", { class: "steps" });
-  let walk = null;
-  const flush = to => {
-    if(walk && walk.sec > 0) ol.append(el("li", { class: "step walk" }, el("span", { class: "kind" }, "徒歩"),
-      el("div", { class: "body" }, el("span", {}, `${to}まで歩く`), el("small", {}, `${fmtMin(walk.sec)}（${fmtDist(walk.m)}）`))));
-    walk = null;
-  };
-  for(const x of steps){
-    if(x.travelMode !== "TRANSIT"){
-      walk = walk || { sec: 0, m: 0 };
-      walk.sec += secs(x.staticDuration); walk.m += x.distanceMeters || 0;
-      continue;
-    }
-    const t = x.transitDetails || {}, line = t.transitLine || {};
-    flush(t.stopDetails?.departureStop?.name || "乗り場");
-    const vehicle = line.vehicle?.name?.text || "電車";
-    const dep = t.localizedValues?.departureTime?.time?.text || "";
-    const arr = t.localizedValues?.arrivalTime?.time?.text || "";
-    const agency = line.agencies?.[0]?.name || "";
-    ol.append(el("li", { class: "step transit" },
-      el("span", { class: "kind", style: `background:${line.color || "#23466E"};color:${line.textColor || "#fff"}` }, vehicle),
-      el("div", { class: "body" },
-        el("span", { class: "line" }, line.nameShort || line.name || vehicle, t.headsign ? `（${t.headsign}行き）` : ""),
-        agency ? el("small", {}, agency) : null,
-        el("span", {}, `${dep}　${t.stopDetails?.departureStop?.name || ""} から乗る`),
-        el("span", {}, `${arr}　${t.stopDetails?.arrivalStop?.name || ""} で降りる`),
-        el("small", {}, [t.stopCount ? `${t.stopCount}駅先` : "", `乗車${fmtMin(secs(x.staticDuration))}`].filter(Boolean).join("・")))));
-  }
-  flush(st.shop.name);
-  box.append(ol);
   return box;
 }
 
