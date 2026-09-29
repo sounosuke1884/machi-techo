@@ -343,11 +343,26 @@ $("#handle").addEventListener("click", () => {
 // Swipe the sheet up/down by its handle or title row; it follows the finger, then snaps to the nearest size.
 (function sheetSwipe(){
   const sheet = $("#sheet"), app = $("#app");
+  const GRAB_ZONE = 72;   // px from the top of the sheet where a swipe resizes it
+  const inGrabZone = y => y - sheet.getBoundingClientRect().top <= GRAB_ZONE;
   let drag = null;
   sheet.addEventListener("pointerdown", e => {
-    if(!e.target.closest("#handle, .sheet-head")) return;
+    if(!inGrabZone(e.clientY)) return;
+    // Text fields keep their own touch behaviour (cursor placement, selection).
+    if(e.target.closest("input, textarea, select")) return;
     drag = { y0: e.clientY, h0: sheet.getBoundingClientRect().height, y: e.clientY, t: e.timeStamp, v: 0, moved: false, id: e.pointerId };
   });
+  // Stop the list from scrolling when the swipe starts in the grab zone (needs a non-passive listener).
+  let touchInZone = false;
+  sheet.addEventListener("touchstart", e => {
+    const t = e.touches[0];
+    touchInZone = !!t && inGrabZone(t.clientY) && !e.target.closest("input, textarea, select");
+  }, { passive: true });
+  sheet.addEventListener("touchmove", e => { if(touchInZone) e.preventDefault(); }, { passive: false });
+  // A swipe that ends on a button must not also press it.
+  sheet.addEventListener("click", e => {
+    if(sheetDragged && !e.target.closest("#handle")){ e.stopPropagation(); e.preventDefault(); }
+  }, true);
   sheet.addEventListener("pointermove", e => {
     if(!drag || e.pointerId !== drag.id) return;
     const dy = e.clientY - drag.y0;
