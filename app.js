@@ -251,6 +251,7 @@ function showMe(){
   }else meMarker.position = me;
   if(panel.mode === "list") renderResults();
 }
+$("#nearBtn").addEventListener("click", openNearby);
 $("#locateBtn").addEventListener("click", async () => {
   try{ await getPosition(); map?.panTo(me); map?.setZoom(16); }
   catch(e){ toast(e.message); }
@@ -306,9 +307,8 @@ function hoursBadge(s){
   return st ? el("span", { class: "hours-badge " + st.tone }, st.text) : null;
 }
 
-async function fetchHours(placeId){
-  const place = new G.places.Place({ id: placeId });
-  await place.fetchFields({ fields: ["regularOpeningHours", "businessStatus"] });
+// Turn a Google Place's opening hours into the plain form stored on a shop.
+function hoursFromPlace(place){
   const oh = place.regularOpeningHours;
   const pt = x => x ? { day: x.day, hour: x.hour, minute: x.minute || 0 } : null;
   return {
@@ -317,6 +317,11 @@ async function fetchHours(placeId){
     businessStatus: place.businessStatus || "",
     fetchedAt: Date.now(),
   };
+}
+async function fetchHours(placeId){
+  const place = new G.places.Place({ id: placeId });
+  await place.fetchFields({ fields: ["regularOpeningHours", "businessStatus"] });
+  return hoursFromPlace(place);
 }
 // Fetch hours for shops that have a Google place but no (or week-old) hours, one at a time.
 let hoursRunning = false;
@@ -515,6 +520,7 @@ function renderPanel(){
   body.replaceChildren();
   if(panel.mode === "detail") body.append(detailView());
   else if(panel.mode === "route") body.append(routeView());
+  else if(panel.mode === "nearby") body.append(nearbyView());
   else body.append(listView());
 }
 
@@ -602,7 +608,7 @@ let pendingDelete = null;
 function openDetail(id, pan){
   panel = { ...panel, mode: "detail", id };
   pendingDelete = null;
-  clearRoute();
+  clearRoute(); clearNearMarkers();
   const s = shops.find(x => x.id === id);
   if(pan && s && hasLoc(s) && map){ map.panTo({ lat: s.lat, lng: s.lng }); if(map.getZoom() < 16) map.setZoom(16); }
   if($("#sheet").dataset.size === "peek") setSheet("half");
@@ -610,7 +616,164 @@ function openDetail(id, pan){
 }
 function backToList(){
   panel = { ...panel, mode: "list", id: null };
-  clearRoute(); renderPanel(); renderMarkers();
+  clearRoute(); clearNearMarkers(); renderPanel(); renderMarkers();
+}
+
+// ================= nearby restaurants (Places Nearby Search) =================
+// For unfamiliar areas: restaurants around the current position, nearest first.
+const NEAR_CATS = [
+  { key: "all", label: "すべて", types: ["restaurant", "cafe", "bakery"] },
+  { key: "washoku", label: "和食", types: ["japanese_restaurant"] },
+  { key: "ramen", label: "ラーメン", types: ["ramen_restaurant"] },
+  { key: "cafe", label: "カフェ", types: ["cafe", "coffee_shop"] },
+  { key: "bar", label: "居酒屋・バー", types: ["bar"] },
+  { key: "chinese", label: "中華", types: ["chinese_restaurant"] },
+  { key: "bakery", label: "パン", types: ["bakery"] },
+];
+const NEAR_FIELDS = ["id", "displayName", "location", "formattedAddress", "rating", "userRatingCount",
+  "primaryTypeDisplayName", "regularOpeningHours", "businessStatus", "googleMapsURI"];
+let nearby = { cat: "all", openOnly: false, loading: false, error: "", results: [], radius: 0, selId: null };
+let nearMarkers = [];
+const walkMinutes = m => Math.max(1, Math.round(m * 1.25 / 80));   // straight line → rough walking time
+// "…中央区天神2丁目…" → "天神"
+const areaFromAddress = a => {
+  const pick = re => (String(a).match(re) || [])[1] || "";
+  return pick(/区([^\d０-９\s,、丁番]+?)(?:[\d０-９]|丁目|$)/) || pick(/(?:市|町|村)([^\d０-９\s,、丁番]+?)(?:[\d０-９]|丁目|$)/);
+};
+
+function clearNearMarkers(){ for(const m of nearMarkers) m.map = null; nearMarkers = []; }
+
+function openNearby(){
+  panel = { ...panel, mode: "nearby", id: null };
+  clearRoute();
+  setSheet("half");
+  searchNearby();
+}
+async function nearbyQuery(center, types, radius){
+  const { places } = await G.places.Place.searchNearby({
+    fields: NEAR_FIELDS, includedTypes: types, maxResultCount: 20,
+    locationRestriction: { center, radius },
+    rankPreference: G.places.SearchNearbyRankPreference?.DISTANCE || "DISTANCE",
+    language: "ja", region: "jp",
+  });
+  return (places || []).filter(p => p.location && p.businessStatus !== "CLOSED_PERMANENTLY");
+}
+async function searchNearby(){
+  nearby = { ...nearby, loading: true, error: "", results: [], selId: null };
+  clearNearMarkers(); renderPanel(); renderMarkers();
+  let origin;
+  try{ origin = await getPosition(); }
+  catch(e){ nearby.loading = false; nearby.error = e.message; renderPanel(); return; }
+  if(!G){ nearby.loading = false; nearby.error = "地図の読み込みが終わっていません。少し待ってからもう一度お試しください。"; renderPanel(); return; }
+  const cat = NEAR_CATS.find(c => c.key === nearby.cat) || NEAR_CATS[0];
+  const want = nearby.cat;
+  try{
+    let radius = 1000, places = await nearbyQuery(origin, cat.types, radius);
+    if(places.length < 5){ radius = 3000; places = await nearbyQuery(origin, cat.types, radius); }
+    if(panel.mode !== "nearby" || nearby.cat !== want) return;   // user moved on
+    nearby.radius = radius;
+    nearby.results = places.map(p => {
+      const lat = p.location.lat(), lng = p.location.lng(), address = cleanAddr(p.formattedAddress);
+      return {
+        id: p.id, placeId: p.id, name: p.displayName || "", lat, lng, address, area: areaFromAddress(address),
+        type: p.primaryTypeDisplayName || "", rating: p.rating || 0, count: p.userRatingCount || 0,
+        mapsUrl: p.googleMapsURI || "", hours: hoursFromPlace(p), dist: haversine(origin, { lat, lng }),
+      };
+    }).sort((a, b) => a.dist - b.dist);
+  }catch(e){
+    console.error(e);
+    if(panel.mode !== "nearby") return;
+    nearby.error = placesErrorText(e);
+  }
+  nearby.loading = false;
+  renderPanel();
+  drawNearMarkers(true);
+}
+function nearShown(){ return nearby.results.filter(r => !nearby.openOnly || hoursStatus(r)?.open); }
+function drawNearMarkers(fit){
+  clearNearMarkers();
+  if(!map) return;
+  const list = nearShown();
+  const bounds = new google.maps.LatLngBounds();
+  if(me) bounds.extend(me);
+  for(const r of list){
+    const sel = r.id === nearby.selId;
+    const m = new G.marker.AdvancedMarkerElement({
+      map, position: { lat: r.lat, lng: r.lng }, title: r.name, zIndex: sel ? 998 : 0, gmpClickable: true,
+      content: el("div", { class: "pin near" + (sel ? " sel" : "") }, el("b", {}, r.name), el("i")),
+    });
+    m.addListener("click", () => selectNear(r.id, false));
+    nearMarkers.push(m);
+    bounds.extend({ lat: r.lat, lng: r.lng });
+  }
+  if(fit && list.length) map.fitBounds(bounds, { top: 80, left: 40, right: 90, bottom: Math.round(innerHeight * 0.5) + 20 });
+}
+function selectNear(id, pan){
+  nearby.selId = nearby.selId === id ? null : id;
+  const r = nearby.results.find(x => x.id === id);
+  if(pan && r && map) map.panTo({ lat: r.lat, lng: r.lng });
+  renderPanel(); drawNearMarkers(false);
+  document.querySelector(`[data-near="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function recordNearby(r){
+  openForm(null);
+  draft.place = { placeId: r.id, lat: r.lat, lng: r.lng, address: r.address, mapsUrl: r.mapsUrl, label: r.address };
+  draft.noAutoLoc = false;
+  draft.prefillHours = r.hours;   // already fetched with the search, saves a lookup
+  $("#f-name").value = r.name;
+  if(r.area) $("#f-area").value = r.area;
+  renderChips(); renderPicked();
+}
+
+function nearbyView(){
+  const w = el("div", { class: "stack" });
+  w.append(el("button", { type: "button", class: "ghost back", onclick: backToList }, "← 記録したお店に戻る"));
+  const shown = nearShown();
+  w.append(el("div", { class: "sheet-head" }, el("h2", {}, "近くの飲食店"),
+    el("span", { class: "count" }, nearby.loading ? "" : nearby.results.length ? `${shown.length}軒・${nearby.radius >= 1000 ? nearby.radius / 1000 + "km" : nearby.radius + "m"}以内・近い順` : "")));
+  const cats = el("div", { class: "row", role: "group", "aria-label": "ジャンル" });
+  for(const c of NEAR_CATS){
+    cats.append(el("button", { type: "button", class: "tab", "aria-pressed": String(nearby.cat === c.key),
+      onclick: () => { if(nearby.cat !== c.key){ nearby.cat = c.key; searchNearby(); } } }, c.label));
+  }
+  const tools = el("div", { class: "row" },
+    el("button", { type: "button", class: "chip", "aria-pressed": String(nearby.openOnly),
+      onclick: () => { nearby.openOnly = !nearby.openOnly; renderPanel(); drawNearMarkers(false); } }, el("span", { class: "dot on" }), "営業中のみ"),
+    el("button", { type: "button", class: "chip", onclick: searchNearby }, "今いる場所で探し直す"));
+  w.append(el("div", { class: "filters" }, cats, tools));
+
+  if(nearby.loading){ w.append(el("p", { class: "hint" }, "現在地の近くの飲食店を探しています…")); return w; }
+  if(nearby.error){ w.append(el("p", { class: "err" }, nearby.error)); return w; }
+  if(!shown.length){
+    w.append(el("p", { class: "empty" }, nearby.results.length ? "今営業中のお店は見つかりませんでした。" : "近くに飲食店が見つかりませんでした。ジャンルを変えて試してください。"));
+    return w;
+  }
+  const ul = el("ul", { class: "items" });
+  for(const r of shown){
+    const saved = shops.find(s => s.placeId === r.id);
+    const sel = r.id === nearby.selId;
+    const li = el("li", { "data-near": r.id, class: sel ? "near-sel" : "" },
+      el("button", { type: "button", class: "item near-item", onclick: () => selectNear(r.id, true) },
+        el("span", { class: "nm" }, r.name),
+        el("span", { class: "dist" }, fmtDist(r.dist), el("br"), `徒歩${walkMinutes(r.dist)}分`),
+        el("span", { class: "meta" },
+          r.type ? el("span", { class: "genre" }, r.type) : null,
+          hoursBadge(r),
+          r.rating ? el("span", { class: "g-rate" }, `★${r.rating.toFixed(1)}`, el("small", {}, `（${r.count.toLocaleString()}）`)) : null,
+          saved ? el("span", { class: "saved-badge" }, "記録済み") : null)));
+    if(sel){
+      li.append(el("div", { class: "near-ops" },
+        saved
+          ? el("button", { type: "button", class: "primary", onclick: () => openDetail(saved.id, true) }, "記録を見る")
+          : el("button", { type: "button", class: "primary", onclick: () => recordNearby(r) }, "記録する"),
+        el("a", { href: dirUrl(r, "WALK"), target: "_blank", rel: "noopener" }, "歩いて行く"),
+        el("a", { href: dirUrl(r, "TRANSIT"), target: "_blank", rel: "noopener" }, "電車・バスで行く"),
+        el("a", { href: r.mapsUrl || mapsUrl(r), target: "_blank", rel: "noopener" }, "Googleマップで見る")));
+    }
+    ul.append(li);
+  }
+  w.append(ul);
+  return w;
 }
 
 function detailView(){
@@ -1106,7 +1269,8 @@ $("#shopForm").addEventListener("submit", async e => {
     // Keep the reading while the name is unchanged; a new name gets a fresh reading in the background.
     kana: prev && prev.name === name ? prev.kana || "" : "",
     // Hours belong to the Google place; a different place is fetched again.
-    hours: prev && prev.placeId && prev.placeId === (pl?.placeId || "") ? prev.hours || null : null,
+    hours: (prev && prev.placeId && prev.placeId === (pl?.placeId || "") ? prev.hours || null : null)
+      || (draft.prefillHours && pl?.placeId && draft.place?.placeId === pl.placeId ? draft.prefillHours : null),
   };
   try{
     await store.put(shop);

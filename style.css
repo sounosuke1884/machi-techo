@@ -74,6 +74,19 @@ textarea{min-height:64px;resize:vertical}
 .hours-badge.on{background:#E3F4E8;color:#1E6B3A}
 .hours-badge.soon{background:#FCF1D8;color:#7A5200}
 .hours-badge.off{background:var(--chip);color:var(--muted)}
+.jump .near-btn{background:var(--star);color:#1a1300;font-weight:700}
+.pin.near b{background:#FFFFFF;color:#18212B;border-color:#18212B}
+.pin.near i{border-top-color:#18212B}
+.near-item{grid-template-columns:1fr auto}
+.near-item .dist{line-height:1.4}
+.near-sel{background:var(--accent-soft);border-radius:10px}
+.near-sel .item{border-bottom:none;padding-left:8px;padding-right:8px}
+.near-ops{display:flex;flex-wrap:wrap;gap:6px;padding:0 8px 10px}
+.near-ops a,.near-ops button{font-size:13px;padding:7px 12px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);text-decoration:none}
+.near-ops .primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.g-rate{color:var(--star);font-weight:700;white-space:nowrap}
+.g-rate small{color:var(--muted);font-weight:400}
+.saved-badge{font-size:11px;font-weight:700;padding:1px 8px;border-radius:999px;border:1px solid var(--accent);color:var(--accent)}
 .hours{border:1px solid var(--line);border-radius:10px;padding:8px 12px}
 .hours summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;font-size:13px}
 .hours summary::-webkit-details-marker{display:none}
