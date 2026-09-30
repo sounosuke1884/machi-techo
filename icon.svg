@@ -1,7 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#23466E"/>
-  <path d="M256 104c-66 0-118 51-118 115 0 86 118 189 118 189s118-103 118-189c0-64-52-115-118-115z" fill="#FFFFFF"/>
-  <rect x="206" y="186" width="100" height="16" rx="8" fill="#23466E"/>
-  <rect x="222" y="202" width="14" height="52" rx="6" fill="#23466E"/>
-  <rect x="276" y="202" width="14" height="52" rx="6" fill="#23466E"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs><clipPath id="r"><rect width="512" height="512" rx="112"/></clipPath></defs><g clip-path="url(#r)"><rect width="512" height="512" fill="#F3EBDD"/>
+  <rect x="104" y="250" width="16" height="96" fill="#1F3A5F"/>
+  <rect x="392" y="250" width="16" height="96" fill="#1F3A5F"/>
+  <path d="M296 300c-8-12 8-18 0-30M320 300c-8-12 8-18 0-30M344 300c-8-12 8-18 0-30" stroke="#1F3A5F" stroke-width="7" fill="none" stroke-linecap="round" opacity=".5"/>
+  <rect x="286" y="304" width="68" height="30" rx="6" fill="#C8553D"/>
+  <rect x="150" y="312" width="36" height="22" rx="4" fill="#1F3A5F" opacity=".7"/>
+  <rect x="196" y="312" width="36" height="22" rx="4" fill="#1F3A5F" opacity=".7"/>
+  <rect x="72" y="334" width="368" height="52" rx="8" fill="#1F3A5F"/>
+  <rect x="72" y="356" width="368" height="8" fill="#F3EBDD" opacity=".25"/>
+  <circle cx="168" cy="414" r="34" fill="#1F3A5F"/><circle cx="168" cy="414" r="13" fill="#F3EBDD"/>
+  <circle cx="344" cy="414" r="34" fill="#1F3A5F"/><circle cx="344" cy="414" r="13" fill="#F3EBDD"/>
+  <rect x="24" y="40" width="464" height="16" rx="8" fill="#C8553D"/>
+  <path d="M40 56H148V256Q94 262 42 254Z" fill="#1F3A5F"/>
+  <path d="M156 56H251V262Q203 266 156 260Z" fill="#1F3A5F"/>
+  <path d="M261 56H356V260Q309 266 261 262Z" fill="#1F3A5F"/>
+  <path d="M364 56H472V254Q418 262 364 256Z" fill="#1F3A5F"/>
+  <circle cx="256" cy="150" r="62" fill="#F3EBDD"/>
+  <text x="256" y="176" text-anchor="middle" font-size="76" font-weight="700" fill="#1F3A5F" font-family="Hiragino Mincho ProN, Yu Mincho, serif">店</text>
+  <rect x="251" y="56" width="10" height="210" fill="#F3EBDD"/>
+</g></svg>
