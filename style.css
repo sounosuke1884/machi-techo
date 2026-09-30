@@ -62,11 +62,13 @@ textarea{min-height:64px;resize:vertical}
 .pin{display:flex;flex-direction:column;align-items:center;transform:translateY(2px);cursor:pointer}
 .pin b{background:var(--accent);color:var(--accent-ink);font-family:var(--body);font-size:12px;font-weight:700;padding:4px 8px;border-radius:10px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3);white-space:nowrap;max-width:9em;overflow:hidden;text-overflow:ellipsis}
 .pin i{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid var(--accent);margin-top:-1px}
-.pin b{display:flex;align-items:center;gap:5px}
-.pin.sel b{outline:3px solid var(--star);outline-offset:1px;transform:scale(1.08)}
-.pin.shut b{opacity:.72}
-.pin-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;border:1px solid rgba(255,255,255,.9)}
-.pin-dot.on{background:#2FA35A}.pin-dot.soon{background:#E0A020}.pin-dot.off{background:#9AA3AD}
+.pin b{display:flex;align-items:center;opacity:1;border-width:3px}
+/* Opening status as the border colour; unknown hours keep the white border. */
+.pin.st-on b{border-color:#2FA35A}
+.pin.st-soon b{border-color:#F2B01E}
+.pin.st-off b{border-color:#9AA3AD}
+.pin.sel{z-index:1}
+.pin.sel b{transform:scale(1.12);box-shadow:0 0 0 3px #18212B,0 3px 10px rgba(0,0,0,.35)}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:1px}
 .dot.on{background:#2FA35A}
 .chip[aria-pressed="true"] .dot{box-shadow:0 0 0 1.5px rgba(255,255,255,.9)}

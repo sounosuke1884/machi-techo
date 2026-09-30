@@ -423,8 +423,9 @@ function renderMarkers(){
   for(const s of filtered().filter(hasLoc)){
     const sel = panel.id === s.id;
     const c = genreColor(s.genre), st = hoursStatus(s);
-    const content = el("div", { class: "pin" + (sel ? " sel" : "") + (st && !st.open ? " shut" : "") },
-      el("b", { style: `background:${c.bg};color:${c.fg}` }, st ? el("span", { class: "pin-dot " + st.tone }) : null, s.name),
+    // Fill = genre colour (always solid); border = opening status.
+    const content = el("div", { class: "pin" + (sel ? " sel" : "") + (st ? " st-" + st.tone : "") },
+      el("b", { style: `background:${c.bg};color:${c.fg}` }, s.name),
       el("i", { style: `border-top-color:${c.bg}` }));
     const m = new G.marker.AdvancedMarkerElement({
       map, position: { lat: s.lat, lng: s.lng }, content, title: s.name, zIndex: sel ? 999 : 1, gmpClickable: true,
