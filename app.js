@@ -4,6 +4,24 @@
 const CFG = window.APP_CONFIG || {};
 const KEY_LS = "machi-techo:gmaps-key";
 const GENRES = ["定食","カフェ","ラーメン","そば・うどん","居酒屋","パン","カレー","中華","その他"];
+// One colour per genre, used for map pins, list chips and filter buttons.
+const GENRE_COLORS = {
+  "定食": { bg: "#2E5E8C", fg: "#FFFFFF" },
+  "カフェ": { bg: "#2A8C8C", fg: "#FFFFFF" },
+  "ラーメン": { bg: "#D9822B", fg: "#FFFFFF" },
+  "そば・うどん": { bg: "#5E7A3A", fg: "#FFFFFF" },
+  "居酒屋": { bg: "#7A3E6E", fg: "#FFFFFF" },
+  "パン": { bg: "#C9A43A", fg: "#2A1F00" },
+  "カレー": { bg: "#8E5B1A", fg: "#FFFFFF" },
+  "中華": { bg: "#B3262E", fg: "#FFFFFF" },
+  "その他": { bg: "#6B7280", fg: "#FFFFFF" },
+};
+const NO_GENRE = { bg: "#1F3A5F", fg: "#FFFFFF" };
+const genreColor = g => GENRE_COLORS[g] || NO_GENRE;
+function genreChip(g){
+  const c = genreColor(g);
+  return el("span", { class: "genre", style: `background:${c.bg};color:${c.fg}` }, g);
+}
 const PHOTO_LABELS = ["入口","出口","外観","店内","料理","メニュー","その他"];
 const MAX_PHOTOS = 8;
 const SPOTS = {
@@ -121,7 +139,7 @@ function dropPhotos(ids){
 
 // ================= state =================
 let shops = [];
-let view = { area: "all", genre: "", q: "" };
+let view = { area: "all", genre: "", q: "", openOnly: false };
 let panel = { mode: "list", id: null, routeMode: "TRANSIT" };   // list | detail | route
 let me = null;           // { lat, lng } current position
 let G = null;            // loaded Google libraries
@@ -160,7 +178,7 @@ async function initMap(){
     clickableIcons: false,
   });
   renderMarkers();
-  autoLocateMissing();
+  autoLocateMissing().then(fillHours);
 }
 
 // ================= automatic placement =================
@@ -242,6 +260,89 @@ document.querySelectorAll("[data-jump]").forEach(b => b.addEventListener("click"
   map.panTo(s); map.setZoom(s.zoom);
 }));
 
+// ================= opening hours =================
+// Hours come from Google Places once and are kept on the shop; they're refreshed weekly.
+// The open/closed state is worked out on the phone, so showing it costs no API calls.
+const HOURS_MAX_AGE = 7 * 24 * 3600 * 1000;
+const WEEK = 7 * 1440;
+const pad2 = n => String(n).padStart(2, "0");
+const minToHHMM = m => `${Math.floor((m % 1440) / 60)}:${pad2(m % 60)}`;
+
+function hoursStatus(s, now = new Date()){
+  const h = s.hours;
+  if(!h) return null;
+  if(h.businessStatus === "CLOSED_PERMANENTLY") return { open: false, tone: "off", text: "閉店" };
+  if(h.businessStatus === "CLOSED_TEMPORARILY") return { open: false, tone: "off", text: "休業中" };
+  const periods = h.periods || [];
+  if(!periods.length) return null;
+  // Open 24 hours: a single period that opens Sunday 0:00 and never closes.
+  if(periods.length === 1 && !periods[0].close) return { open: true, tone: "on", text: "24時間営業" };
+  const cur = now.getDay() * 1440 + now.getHours() * 60 + now.getMinutes();
+  const spans = periods.filter(p => p.open).map(p => {
+    const start = p.open.day * 1440 + p.open.hour * 60 + (p.open.minute || 0);
+    let end = p.close ? p.close.day * 1440 + p.close.hour * 60 + (p.close.minute || 0) : start + 1440;
+    if(end <= start) end += WEEK;
+    return { start, end };
+  });
+  for(const { start, end } of spans){
+    for(const t of [cur, cur + WEEK]){
+      if(t >= start && t < end){
+        const left = end - t;
+        return left <= 60
+          ? { open: true, tone: "soon", text: `まもなく閉店 ${minToHHMM(end)}` }
+          : { open: true, tone: "on", text: `営業中・${minToHHMM(end)}まで` };
+      }
+    }
+  }
+  // Closed now: find the next opening.
+  const next = spans.map(({ start }) => (start - cur + WEEK) % WEEK).sort((a, b) => a - b)[0];
+  const today = now.getDay();
+  const opensToday = periods.some(p => p.open && p.open.day === today);
+  if(next != null && cur % 1440 + next < 1440) return { open: false, tone: "off", text: `営業時間外・${minToHHMM(cur + next)}から` };
+  return { open: false, tone: "off", text: opensToday ? "本日の営業は終了" : "定休日" };
+}
+function hoursBadge(s){
+  const st = hoursStatus(s);
+  return st ? el("span", { class: "hours-badge " + st.tone }, st.text) : null;
+}
+
+async function fetchHours(placeId){
+  const place = new G.places.Place({ id: placeId });
+  await place.fetchFields({ fields: ["regularOpeningHours", "businessStatus"] });
+  const oh = place.regularOpeningHours;
+  const pt = x => x ? { day: x.day, hour: x.hour, minute: x.minute || 0 } : null;
+  return {
+    periods: (oh?.periods || []).map(p => ({ open: pt(p.open), close: pt(p.close) })),
+    weekdayText: oh?.weekdayDescriptions || [],
+    businessStatus: place.businessStatus || "",
+    fetchedAt: Date.now(),
+  };
+}
+// Fetch hours for shops that have a Google place but no (or week-old) hours, one at a time.
+let hoursRunning = false;
+async function fillHours(){
+  if(hoursRunning || !G) return;
+  hoursRunning = true;
+  let changed = false;
+  try{
+    const todo = shops.filter(s => s.placeId && (!s.hours || Date.now() - (s.hours.fetchedAt || 0) > HOURS_MAX_AGE));
+    for(const s of todo){
+      let hours;
+      try{ hours = await fetchHours(s.placeId); }
+      catch(e){ console.error(e); continue; }
+      const cur = shops.find(x => x.id === s.id);
+      if(!cur || cur.placeId !== s.placeId) continue;
+      const next = { ...cur, hours };
+      try{ await store.put(next); }catch{}
+      shops = shops.map(x => x.id === s.id ? next : x);
+      changed = true;
+    }
+  }finally{ hoursRunning = false; }
+  if(changed){ renderMarkers(); renderPanel(); }
+}
+// Keep "営業中" labels current while the app stays open.
+setInterval(() => { if(document.visibilityState === "visible" && shops.some(s => s.hours)){ renderMarkers(); if(panel.mode === "list") renderResults(); } }, 5 * 60 * 1000);
+
 // ================= markers =================
 // Normalize for search: full/half width, case, katakana → hiragana, and ignore spaces and dots.
 const toHiragana = s => String(s || "").normalize("NFKC").replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
@@ -251,6 +352,7 @@ function filtered(){
   return shops.filter(s =>
     (view.area === "all" || areaOf(s) === view.area) &&
     (!view.genre || s.genre === view.genre) &&
+    (!view.openOnly || hoursStatus(s)?.open) &&
     (!q || norm([s.name, s.kana, s.memo, s.area, s.address].join(" ")).includes(q)));
 }
 
@@ -315,7 +417,10 @@ function renderMarkers(){
   markers.clear();
   for(const s of filtered().filter(hasLoc)){
     const sel = panel.id === s.id;
-    const content = el("div", { class: "pin" + (sel ? " sel" : "") }, el("b", {}, s.name), el("i"));
+    const c = genreColor(s.genre), st = hoursStatus(s);
+    const content = el("div", { class: "pin" + (sel ? " sel" : "") + (st && !st.open ? " shut" : "") },
+      el("b", { style: `background:${c.bg};color:${c.fg}` }, st ? el("span", { class: "pin-dot " + st.tone }) : null, s.name),
+      el("i", { style: `border-top-color:${c.bg}` }));
     const m = new G.marker.AdvancedMarkerElement({
       map, position: { lat: s.lat, lng: s.lng }, content, title: s.name, zIndex: sel ? 999 : 1, gmpClickable: true,
     });
@@ -444,9 +549,16 @@ function listView(){
     }
     const used = GENRES.filter(g => shops.some(s => s.genre === g));
     const gs = el("div", { class: "row" });
+    if(shops.some(s => s.hours)){
+      gs.append(el("button", { type: "button", class: "chip open-chip", "aria-pressed": String(view.openOnly),
+        onclick: () => { view.openOnly = !view.openOnly; refresh(); } }, el("span", { class: "dot on" }), "営業中のみ"));
+    }
     if(used.length > 1) for(const g of used){
-      gs.append(el("button", { type: "button", class: "chip", "aria-pressed": String(view.genre === g),
-        onclick: () => { view.genre = view.genre === g ? "" : g; refresh(); } }, g));
+      const c = genreColor(g), on = view.genre === g;
+      gs.append(el("button", { type: "button", class: "chip", "aria-pressed": String(on),
+        style: on ? `background:${c.bg};color:${c.fg}` : "",
+        onclick: () => { view.genre = view.genre === g ? "" : g; refresh(); } },
+        el("span", { class: "dot", style: `background:${c.bg}` }), g));
     }
     f.append(tabs, gs, q);
     wrap.append(f);
@@ -471,12 +583,12 @@ function renderResults(){
   }
   const ul = el("ul", { class: "items" });
   for(const s of items){
-    const thumb = s.photos?.length ? photoImg(s.photos[0].id, { class: "thumb" }) : el("span", { class: "thumb" }, s.genre || "店");
+    const thumb = s.photos?.length ? photoImg(s.photos[0].id, { class: "thumb" }) : el("span", { class: "thumb", style: `background:${genreColor(s.genre).bg};color:${genreColor(s.genre).fg}` }, s.genre || "店");
     ul.append(el("li", {}, el("button", { type: "button", class: "item", onclick: () => openDetail(s.id, true) },
       thumb,
       el("span", { class: "nm" }, s.name),
       el("span", { class: "dist" }, origin && hasLoc(s) ? fmtDist(haversine(origin, s)) : hasLoc(s) ? "" : "位置なし"),
-      el("span", { class: "meta" }, s.genre ? el("span", { class: "genre" }, s.genre) : null, areaOf(s), starsEl(s.rating || 0)))));
+      el("span", { class: "meta" }, s.genre ? genreChip(s.genre) : null, hoursBadge(s), areaOf(s), starsEl(s.rating || 0)))));
   }
   box.append(ul);
 }
@@ -506,8 +618,15 @@ function detailView(){
   if(!s){ panel.mode = "list"; return listView(); }
   const w = el("div", { class: "detail" });
   w.append(el("button", { type: "button", class: "ghost back", onclick: backToList }, "← 一覧に戻る"));
-  w.append(el("div", { class: "d-title" }, el("h2", {}, s.name), s.genre ? el("span", { class: "genre" }, s.genre) : null, starsEl(s.rating || 0)));
+  w.append(el("div", { class: "d-title" }, el("h2", {}, s.name), s.genre ? genreChip(s.genre) : null, starsEl(s.rating || 0)));
   w.append(el("p", { class: "d-addr" }, [areaOf(s), s.address].filter(Boolean).join("　")));
+  if(s.hours?.weekdayText?.length || s.hours?.businessStatus){
+    const week = el("details", { class: "hours" },
+      el("summary", {}, hoursBadge(s) || "営業時間", el("span", { class: "hours-more" }, "営業時間を見る")),
+      el("ul", {}, (s.hours.weekdayText || []).map(t => el("li", {}, t))),
+      el("p", { class: "hint" }, "祝日や臨時休業は反映されないことがあります。"));
+    w.append(week);
+  }
   if(s.photos?.length){
     w.append(el("div", { class: "thumbs" }, s.photos.map((p, i) =>
       el("button", { type: "button", "aria-label": `${p.label}の写真を見る`, onclick: () => openViewer(s.photos, i) },
@@ -986,6 +1105,8 @@ $("#shopForm").addEventListener("submit", async e => {
     locateTried: !pl,
     // Keep the reading while the name is unchanged; a new name gets a fresh reading in the background.
     kana: prev && prev.name === name ? prev.kana || "" : "",
+    // Hours belong to the Google place; a different place is fetched again.
+    hours: prev && prev.placeId && prev.placeId === (pl?.placeId || "") ? prev.hours || null : null,
   };
   try{
     await store.put(shop);
@@ -997,6 +1118,7 @@ $("#shopForm").addEventListener("submit", async e => {
     closeForm(true);
     openDetail(shop.id, true);
     fillReadings();
+    fillHours();
   }catch{
     toast("保存できませんでした。端末の空き容量を確認してください。");
   }finally{ $("#saveBtn").disabled = false; }
@@ -1040,6 +1162,7 @@ $("#importInput").addEventListener("change", async e => {
     toast(`${j.shops.length}軒を読み込みました`);
     backToList();
     fillReadings();
+    fillHours();
   }catch{ toast("このファイルは読み込めませんでした"); }
 });
 $("#keyBtn").addEventListener("click", () => { menu.hidden = true; showSetup(); });

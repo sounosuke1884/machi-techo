@@ -62,8 +62,27 @@ textarea{min-height:64px;resize:vertical}
 .pin{display:flex;flex-direction:column;align-items:center;transform:translateY(2px);cursor:pointer}
 .pin b{background:var(--accent);color:var(--accent-ink);font-family:var(--body);font-size:12px;font-weight:700;padding:4px 8px;border-radius:10px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3);white-space:nowrap;max-width:9em;overflow:hidden;text-overflow:ellipsis}
 .pin i{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid var(--accent);margin-top:-1px}
-.pin.sel b{background:var(--star);color:#1a1300}
-.pin.sel i{border-top-color:var(--star)}
+.pin b{display:flex;align-items:center;gap:5px}
+.pin.sel b{outline:3px solid var(--star);outline-offset:1px;transform:scale(1.08)}
+.pin.shut b{opacity:.72}
+.pin-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;border:1px solid rgba(255,255,255,.9)}
+.pin-dot.on{background:#2FA35A}.pin-dot.soon{background:#E0A020}.pin-dot.off{background:#9AA3AD}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:1px}
+.dot.on{background:#2FA35A}
+.chip[aria-pressed="true"] .dot{box-shadow:0 0 0 1.5px rgba(255,255,255,.9)}
+.hours-badge{font-size:11px;font-weight:700;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.hours-badge.on{background:#E3F4E8;color:#1E6B3A}
+.hours-badge.soon{background:#FCF1D8;color:#7A5200}
+.hours-badge.off{background:var(--chip);color:var(--muted)}
+.hours{border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.hours summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;font-size:13px}
+.hours summary::-webkit-details-marker{display:none}
+.hours-more{color:var(--muted);font-size:12px;margin-left:auto}
+.hours ul{list-style:none;margin:8px 0 4px;padding:0;font-size:13px;display:flex;flex-direction:column;gap:2px;font-variant-numeric:tabular-nums}
+@media (prefers-color-scheme: dark){
+  .hours-badge.on{background:#173A24;color:#8FD9A8}
+  .hours-badge.soon{background:#3A2E10;color:#F0C66A}
+}
 .me{width:18px;height:18px;border-radius:50%;background:#1A73E8;border:3px solid #fff;box-shadow:0 0 0 6px rgba(26,115,232,.25)}
 
 /* bottom sheet */
