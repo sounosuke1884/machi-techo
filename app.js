@@ -177,6 +177,10 @@ async function initMap(){
     disableDefaultUI: true, zoomControl: false, gestureHandling: "greedy",
     clickableIcons: false,
   });
+  // Show where you are right away and keep following until you move the map yourself.
+  map.addListener("dragstart", () => setFollow(false));
+  setFollow(true);
+  startWatch();
   renderMarkers();
   autoLocateMissing().then(fillHours);
 }
@@ -230,18 +234,54 @@ $("#setupForm").addEventListener("submit", e => {
 });
 
 // ================= current location =================
+// The position is watched the whole time the app is open, so the blue dot moves with you.
+// "Follow" keeps the map centred on you until you move the map yourself; 現在地 turns it back on.
+let meAccuracy = 0, meAt = 0, meCircle = null, watchId = null, follow = false, listAt = null, deniedShown = false;
+const locError = code => code === 1
+  ? "位置情報の利用が許可されていません。iPhoneの「設定」→「プライバシーとセキュリティ」→「位置情報サービス」→「Safari Webサイト」を「使用中のみ」にしてください。"
+  : "現在地を取得できませんでした。電波の良い場所でもう一度お試しください。";
+
+function setFollow(on){
+  follow = on;
+  $("#locateBtn").classList.toggle("following", on);
+}
+function onPosition(p){
+  const first = !me;
+  me = { lat: p.coords.latitude, lng: p.coords.longitude };
+  meAccuracy = p.coords.accuracy || 0;
+  meAt = Date.now();
+  showMe();
+  if(follow && map){
+    if(first && map.getZoom() < 16) map.setZoom(16);
+    map.panTo(me);
+  }
+}
+function startWatch(){
+  if(!navigator.geolocation || watchId != null) return;
+  watchId = navigator.geolocation.watchPosition(onPosition, err => {
+    if(err.code === 1){
+      stopWatch(); setFollow(false);
+      if(!deniedShown){ deniedShown = true; toast(locError(1)); }
+    }
+  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+}
+function stopWatch(){
+  if(watchId != null){ navigator.geolocation.clearWatch(watchId); watchId = null; }
+}
+// Phones pause location in the background: stop while hidden, pick up again when the app comes back.
+document.addEventListener("visibilitychange", () => {
+  if(document.visibilityState === "visible"){ if(map) startWatch(); }
+  else stopWatch();
+});
+
+// One-off position for routes and nearby search; reuses the live position when it is fresh.
 function getPosition(){
+  if(me && Date.now() - meAt < 15000) return Promise.resolve(me);
   return new Promise((res, rej) => {
     if(!navigator.geolocation){ rej(new Error("この端末では現在地を使えません")); return; }
-    navigator.geolocation.getCurrentPosition(p => {
-      me = { lat: p.coords.latitude, lng: p.coords.longitude };
-      showMe();
-      res(me);
-    }, err => {
-      rej(new Error(err.code === 1
-        ? "位置情報の利用が許可されていません。ブラウザの設定で許可してください。"
-        : "現在地を取得できませんでした。電波の良い場所でもう一度お試しください。"));
-    }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
+    navigator.geolocation.getCurrentPosition(p => { onPosition(p); startWatch(); res(me); },
+      err => rej(new Error(locError(err.code))),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 10000 });
   });
 }
 function showMe(){
@@ -249,15 +289,26 @@ function showMe(){
   if(!meMarker){
     meMarker = new G.marker.AdvancedMarkerElement({ map, position: me, content: el("div", { class: "me" }), title: "現在地", zIndex: 1000 });
   }else meMarker.position = me;
-  if(panel.mode === "list") renderResults();
+  // Pale circle showing how precise the position is (hidden when it's too vague to help).
+  if(meAccuracy && meAccuracy < 1000){
+    if(!meCircle) meCircle = new google.maps.Circle({ map, clickable: false, strokeOpacity: 0, fillColor: "#1A73E8", fillOpacity: .12, zIndex: 1 });
+    meCircle.setCenter(me); meCircle.setRadius(meAccuracy); meCircle.setMap(map);
+  }else meCircle?.setMap(null);
+  // Re-sort the list by distance only after a real move, not on every tiny GPS jitter.
+  if(panel.mode === "list" && (!listAt || haversine(listAt, me) > 25)){ listAt = me; renderResults(); }
 }
 $("#nearBtn").addEventListener("click", openNearby);
 $("#locateBtn").addEventListener("click", async () => {
-  try{ await getPosition(); map?.panTo(me); map?.setZoom(16); }
-  catch(e){ toast(e.message); }
+  setFollow(true);
+  try{
+    await getPosition();
+    map?.panTo(me);
+    if(map && map.getZoom() < 16) map.setZoom(16);
+  }catch(e){ setFollow(false); toast(e.message); }
 });
 document.querySelectorAll("[data-jump]").forEach(b => b.addEventListener("click", () => {
   const s = SPOTS[b.dataset.jump]; if(!map) return;
+  setFollow(false);
   map.panTo(s); map.setZoom(s.zoom);
 }));
 
@@ -611,7 +662,7 @@ function openDetail(id, pan){
   pendingDelete = null;
   clearRoute(); clearNearMarkers();
   const s = shops.find(x => x.id === id);
-  if(pan && s && hasLoc(s) && map){ map.panTo({ lat: s.lat, lng: s.lng }); if(map.getZoom() < 16) map.setZoom(16); }
+  if(pan && s && hasLoc(s) && map){ setFollow(false); map.panTo({ lat: s.lat, lng: s.lng }); if(map.getZoom() < 16) map.setZoom(16); }
   if($("#sheet").dataset.size === "peek") setSheet("half");
   renderPanel(); renderMarkers();
 }
@@ -707,12 +758,13 @@ function drawNearMarkers(fit){
     nearMarkers.push(m);
     bounds.extend({ lat: r.lat, lng: r.lng });
   }
+  if(fit && list.length){ setFollow(false); }
   if(fit && list.length) map.fitBounds(bounds, { top: 80, left: 40, right: 90, bottom: Math.round(innerHeight * 0.5) + 20 });
 }
 function selectNear(id, pan){
   nearby.selId = nearby.selId === id ? null : id;
   const r = nearby.results.find(x => x.id === id);
-  if(pan && r && map) map.panTo({ lat: r.lat, lng: r.lng });
+  if(pan && r && map){ setFollow(false); map.panTo({ lat: r.lat, lng: r.lng }); }
   renderPanel(); drawNearMarkers(false);
   document.querySelector(`[data-near="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
@@ -904,6 +956,7 @@ async function computeRoutes(origin, s, mode){
 function drawRoute(route, origin, s){
   clearRoute();
   if(!map) return;
+  setFollow(false);
   const decode = p => G.geometry.encoding.decodePath(p);
   const bounds = new google.maps.LatLngBounds();
   bounds.extend(origin); bounds.extend({ lat: s.lat, lng: s.lng });
