@@ -99,7 +99,10 @@ textarea{min-height:64px;resize:vertical}
   .hours-badge.on{background:#173A24;color:#8FD9A8}
   .hours-badge.soon{background:#3A2E10;color:#F0C66A}
 }
-.me{width:18px;height:18px;border-radius:50%;background:#1A73E8;border:3px solid #fff;box-shadow:0 0 0 6px rgba(26,115,232,.25)}
+.me{position:relative;width:18px;height:18px;border-radius:50%;background:#1A73E8;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.me-pulse{position:absolute;left:50%;top:50%;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:rgba(26,115,232,.35);z-index:-1;pointer-events:none}
+@media (prefers-reduced-motion:no-preference){.me-pulse{animation:me-pulse 2s ease-out infinite}}
+@keyframes me-pulse{from{transform:scale(1);opacity:.9}to{transform:scale(3.2);opacity:0}}
 
 /* bottom sheet */
 .sheet{position:absolute;left:0;right:0;bottom:0;z-index:7;background:var(--surface);border-radius:18px 18px 0 0;box-shadow:0 -6px 24px rgba(16,28,44,.14);display:flex;flex-direction:column;height:var(--sheet-h,132px);transition:height .25s;padding-bottom:var(--safe-b);max-width:720px;margin:0 auto}

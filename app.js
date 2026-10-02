@@ -241,15 +241,63 @@ function setFollow(on){
   $("#locateBtn").classList.toggle("following", on);
 }
 function onPosition(p){
-  const first = !me;
-  me = { lat: p.coords.latitude, lng: p.coords.longitude };
-  meAccuracy = p.coords.accuracy || 0;
-  meAt = Date.now();
-  showMe();
-  if(follow && map){
-    if(first && map.getZoom() < 16) map.setZoom(16);
-    map.panTo(me);
+  const next = { lat: p.coords.latitude, lng: p.coords.longitude };
+  const acc = p.coords.accuracy || 0;
+  if(me){
+    // Ignore GPS jitter while standing still, and one-off fixes that are suddenly much less precise.
+    if(haversine(me, next) < 2) { meAt = Date.now(); return; }
+    if(acc > 50 && meAccuracy && acc > meAccuracy * 3 && Date.now() - meAt < 10000) return;
   }
+  const first = !me;
+  me = next;
+  meAccuracy = acc;
+  meAt = Date.now();
+  if(first && follow && map){
+    if(map.getZoom() < 16) map.setZoom(16);
+    map.setCenter(me);
+  }
+  showMe();
+}
+
+// The dot glides from where it is shown to the new fix instead of jumping there.
+// While following, the map centre glides with it.
+let shownMe = null, meAnim = 0;
+const ME_GLIDE_MS = 900;
+function placeMe(pos){
+  if(meMarker) meMarker.position = pos;
+  if(meCircle?.getMap()) meCircle.setCenter(pos);
+  if(follow && map) map.setCenter(pos);
+}
+function glideMe(){
+  cancelAnimationFrame(meAnim);
+  const from = shownMe, to = me;
+  // First fix, or a jump too far to animate sensibly: go straight there.
+  if(!from || haversine(from, to) > 300 || matchMedia("(prefers-reduced-motion: reduce)").matches){
+    shownMe = { ...to }; placeMe(shownMe); return;
+  }
+  const t0 = performance.now();
+  const step = now => {
+    const k = Math.min(1, (now - t0) / ME_GLIDE_MS);
+    const e = 1 - Math.pow(1 - k, 3);   // ease-out
+    shownMe = { lat: from.lat + (to.lat - from.lat) * e, lng: from.lng + (to.lng - from.lng) * e };
+    placeMe(shownMe);
+    if(k < 1) meAnim = requestAnimationFrame(step);
+  };
+  meAnim = requestAnimationFrame(step);
+}
+function showMe(){
+  if(!map || !me) return;
+  if(!meMarker){
+    meMarker = new G.marker.AdvancedMarkerElement({ map, position: me, content: el("div", { class: "me" }, el("span", { class: "me-pulse" })), title: "現在地", zIndex: 1000 });
+  }
+  // Pale circle showing how precise the position is (hidden when it's too vague to help).
+  if(meAccuracy && meAccuracy < 1000){
+    if(!meCircle) meCircle = new google.maps.Circle({ map, clickable: false, strokeOpacity: 0, fillColor: "#1A73E8", fillOpacity: .12, zIndex: 1, center: shownMe || me });
+    meCircle.setRadius(meAccuracy); meCircle.setMap(map);
+  }else meCircle?.setMap(null);
+  glideMe();
+  // Re-sort the list by distance only after a real move, not on every tiny GPS jitter.
+  if(panel.mode === "list" && (!listAt || haversine(listAt, me) > 25)){ listAt = me; renderResults(); }
 }
 function startWatch(){
   if(!navigator.geolocation || watchId != null) return;
@@ -278,19 +326,6 @@ function getPosition(){
       err => rej(new Error(locError(err.code))),
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 10000 });
   });
-}
-function showMe(){
-  if(!map || !me) return;
-  if(!meMarker){
-    meMarker = new G.marker.AdvancedMarkerElement({ map, position: me, content: el("div", { class: "me" }), title: "現在地", zIndex: 1000 });
-  }else meMarker.position = me;
-  // Pale circle showing how precise the position is (hidden when it's too vague to help).
-  if(meAccuracy && meAccuracy < 1000){
-    if(!meCircle) meCircle = new google.maps.Circle({ map, clickable: false, strokeOpacity: 0, fillColor: "#1A73E8", fillOpacity: .12, zIndex: 1 });
-    meCircle.setCenter(me); meCircle.setRadius(meAccuracy); meCircle.setMap(map);
-  }else meCircle?.setMap(null);
-  // Re-sort the list by distance only after a real move, not on every tiny GPS jitter.
-  if(panel.mode === "list" && (!listAt || haversine(listAt, me) > 25)){ listAt = me; renderResults(); }
 }
 $("#nearBtn").addEventListener("click", openNearby);
 $("#locateBtn").addEventListener("click", async () => {
