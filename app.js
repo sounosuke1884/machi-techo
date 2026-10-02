@@ -24,11 +24,6 @@ function genreChip(g){
 }
 const PHOTO_LABELS = ["入口","出口","外観","店内","料理","メニュー","その他"];
 const MAX_PHOTOS = 8;
-const SPOTS = {
-  tenjin: { lat: 33.5913, lng: 130.3990, zoom: 16 },
-  hakata: { lat: 33.5897, lng: 130.4207, zoom: 16 },
-  nakasu: { lat: 33.5935, lng: 130.4045, zoom: 16 },
-};
 const HOME = { lat: 33.5905, lng: 130.4105, zoom: 15 };   // 天神〜博多の間
 
 function apiKey(){
@@ -306,11 +301,6 @@ $("#locateBtn").addEventListener("click", async () => {
     if(map && map.getZoom() < 16) map.setZoom(16);
   }catch(e){ setFollow(false); toast(e.message); }
 });
-document.querySelectorAll("[data-jump]").forEach(b => b.addEventListener("click", () => {
-  const s = SPOTS[b.dataset.jump]; if(!map) return;
-  setFollow(false);
-  map.panTo(s); map.setZoom(s.zoom);
-}));
 
 // ================= opening hours =================
 // Hours come from Google Places once and are kept on the shop; they're refreshed weekly.
