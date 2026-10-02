@@ -1114,7 +1114,13 @@ function closeForm(saved){
 $("#addBtn").addEventListener("click", () => openForm(null));
 $("#formClose").addEventListener("click", () => closeForm(false));
 $("#formCancel").addEventListener("click", () => closeForm(false));
-dlg.addEventListener("cancel", e => { e.preventDefault(); closeForm(false); });
+// Only the form's own cancel (Esc / back gesture) closes it. A photo picker or camera that is
+// dismissed also fires a bubbling "cancel" from its file input; that must not throw away the form.
+dlg.addEventListener("cancel", e => {
+  if(e.target !== dlg) return;
+  e.preventDefault();
+  closeForm(false);
+});
 
 function renderChips(){
   const ac = $("#areaChips"); ac.replaceChildren();
@@ -1290,7 +1296,9 @@ function renderPhotos(){
   });
   for(let i = 0; i < draft.uploading; i++) g.append(el("div", { class: "ph" }, el("div", { class: "wait" }, "追加中…")));
   if(draft.photos.length + draft.uploading < MAX_PHOTOS){
-    const input = el("input", { type: "file", accept: "image/*", multiple: "", onchange: e => { addPhotos(e.target.files); e.target.value = ""; } });
+    const input = el("input", { type: "file", accept: "image/*", multiple: "",
+      onchange: e => { addPhotos(e.target.files); e.target.value = ""; },
+      oncancel: e => e.stopPropagation() });   // closing the camera/photo picker only closes the picker
     g.append(el("label", { class: "add-photo" }, el("b", {}, "＋"), "写真を追加", input));
   }
   $("#saveBtn").disabled = draft.uploading > 0;
